@@ -1,0 +1,69 @@
+keep_alive: 75
+listen_addresses: '0.0.0.0:3000'
+base_path: 
+worker_processes: 8
+cache_size_mb: 1024
+preferred_encoding: gzip
+web_ui: enable-for-all
+observability:
+  metrics:
+    add_labels: {}
+
+cors: 
+  origin: 
+    - "*"
+  max_age: 3600
+
+postgres:
+  connection_string: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB}?sslmode=disable"
+  default_srid: 4326
+  auto_publish:
+    tables:
+      from_schemas:
+        - topology
+      source_id_format: '{schema}.{table}'
+      id_columns: id
+      clip_geom: true
+      buffer: 64
+      extent: 4096
+      
+pmtiles:
+  directory_cache_size_mb: 128
+  allow_http: true
+  paths:
+  - /pmtiles
+
+  # sources:
+  #   administrative: /pmtiles/administrative.pmtiles
+  #   street_centerline: /pmtiles/street_centerline.pmtiles
+  #   address_layer: /pmtiles/address_layer.pmtiles
+  #   city_district_zone: /pmtiles/city_district_zone.pmtiles
+
+mbtiles:
+  paths:
+  # - /mbtiles
+  sources:
+    # # named source matching source name to a single file
+
+
+sprites:
+  cache_size_mb: 64
+
+  paths:
+  # - /sprites
+  sources:
+
+fonts:
+  cache_size_mb: 64
+  paths:
+  # - /fonts
+
+styles:
+  paths:
+  - /styles
+  # sources:
+  #   basic-style: /styles/style.json
+  #   sat-style: /styles/style_sat.json
+  #   3d-style: /styles/style_3d.json
+
+tilejson_url_version_param: null 

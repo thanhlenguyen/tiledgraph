@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>GeoRouting Lab</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <nav id="sidebar">
+
+    <div id="brand">
+      <span class="brand-icon">◈</span>
+      <div>
+        <div class="brand-title">GeoRouting Lab</div>
+        <div class="brand-sub">Valhalla · VROOM</div>
+      </div>
+    </div>
+
+    <!-- Tab bar -->
+    <div id="tab-bar">
+      <button class="tab active" data-tab="route"     onclick="switchTab('route')">Route</button>
+      <button class="tab"        data-tab="vrp"       onclick="switchTab('vrp')">VRP / TSP</button>
+      <button class="tab"        data-tab="isochrone" onclick="switchTab('isochrone')">Isochrone</button>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         TAB 1 — ROUTE COMPARISON
+    ══════════════════════════════════════════════════════ -->
+    <div id="tab-route" class="tab-panel active">
+
+      <p class="instruction">Pick a transport mode, then click two points on the map. Three route alternatives will be drawn simultaneously.</p>
+
+      <!-- Profile selector -->
+      <div class="field-row">
+        <label>Transport</label>
+        <div class="seg-group" id="route-profile-seg">
+          <button class="seg active" data-profile="auto"       onclick="routeSetProfile(this)">🚗 Car</button>
+          <button class="seg"        data-profile="bicycle"    onclick="routeSetProfile(this)">🚲 Bike</button>
+          <button class="seg"        data-profile="pedestrian" onclick="routeSetProfile(this)">🚶 Walk</button>
+        </div>
+      </div>
+
+      <!-- Click status -->
+      <div id="route-pick-status" class="pick-status">
+        <div><span id="route-s-dot" class="dot dot-start"></span><span id="route-s-label">Start — click map</span></div>
+        <div><span id="route-e-dot" class="dot dot-end"></span><span id="route-e-label">End — click map</span></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-action" id="route-pick-btn" onclick="routeActivate()">📍 Pick Points</button>
+        <button class="btn-ghost"  onclick="routeClear()">✕ Clear</button>
+      </div>
+
+      <!-- Route legend -->
+      <div id="route-legend" class="legend hidden"></div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         TAB 2 — VRP / TSP
+    ══════════════════════════════════════════════════════ -->
+    <div id="tab-vrp" class="tab-panel">
+
+      <p class="instruction">Click at least 2 stops on the map. Each stop gets a unique color — the route segment leaving that stop matches its color. Optimal order computes 2 s after your last click.</p>
+
+      <div class="field-row">
+        <label>Transport</label>
+        <div class="seg-group" id="vrp-profile-seg">
+          <button class="seg active" data-profile="auto"       onclick="vrpSetProfile(this)">🚗 Car</button>
+          <button class="seg"        data-profile="bicycle"    onclick="vrpSetProfile(this)">🚲 Bike</button>
+          <button class="seg"        data-profile="pedestrian" onclick="vrpSetProfile(this)">🚶 Walk</button>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label>Mode</label>
+        <div class="seg-group">
+          <button class="seg active" data-vrpmode="vrp" onclick="vrpSetMode(this)">VRP <span class="seg-hint">↩ return</span></button>
+          <button class="seg"        data-vrpmode="tsp" onclick="vrpSetMode(this)">TSP <span class="seg-hint">→ open</span></button>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-action" id="vrp-pick-btn" onclick="vrpActivate()">📌 Add Stops</button>
+        <button class="btn-ghost"  onclick="vrpClear()">✕ Clear</button>
+      </div>
+
+      <div id="vrp-counter" class="mono-stat">0 stops added</div>
+      <div id="vrp-timer-bar" class="timer-bar hidden"><div id="vrp-timer-fill"></div></div>
+      <div id="vrp-legend" class="legend hidden"></div>
+
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════
+         TAB 3 — ISOCHRONE
+    ══════════════════════════════════════════════════════ -->
+    <div id="tab-isochrone" class="tab-panel">
+
+      <p class="instruction">Configure the contours, then click any point on the map to draw reachability rings.</p>
+
+      <div class="field-row">
+        <label>Transport</label>
+        <div class="seg-group" id="iso-profile-seg">
+          <button class="seg active" data-profile="auto"       onclick="isoSetProfile(this)">🚗 Car</button>
+          <button class="seg"        data-profile="bicycle"    onclick="isoSetProfile(this)">🚲 Bike</button>
+          <button class="seg"        data-profile="pedestrian" onclick="isoSetProfile(this)">🚶 Walk</button>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label>Levels <span class="mono-val" id="iso-levels-val">3</span></label>
+        <input type="range" id="iso-levels" min="1" max="5" value="3"
+               oninput="document.getElementById('iso-levels-val').textContent=this.value; if(window.isoState&&isoState.originLngLat) isoHandleClick(isoState.originLngLat)">
+      </div>
+
+      <div class="field-row">
+        <label>Interval <span class="mono-val" id="iso-interval-val">10 min</span></label>
+        <div class="seg-group">
+          <button class="seg"        data-interval="5"  onclick="isoSetInterval(this)">5 m</button>
+          <button class="seg active" data-interval="10" onclick="isoSetInterval(this)">10 m</button>
+          <button class="seg"        data-interval="15" onclick="isoSetInterval(this)">15 m</button>
+          <button class="seg"        data-interval="20" onclick="isoSetInterval(this)">20 m</button>
+          <button class="seg"        data-interval="30" onclick="isoSetInterval(this)">30 m</button>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-action" id="iso-pick-btn" onclick="isoActivate()">📍 Place Origin</button>
+        <button class="btn-ghost"  onclick="isoClear()">✕ Clear</button>
+      </div>
+
+      <div id="iso-legend" class="legend hidden"></div>
+
+    </div>
+
+    <!-- ── Status bar (shared) ────────────────────────────── -->
+    <div id="status-bar"></div>
+
+  </nav>
+
+  <!-- Layer switcher lives on the map (bottom-right via MapLibre control) -->
+
+  <script src="js/scripts.js"></script>
+</body>
+</html>

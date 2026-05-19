@@ -1,0 +1,427 @@
+/* ============================================================
+   GeoRouting Lab — styles.css
+   Dark cartographic aesthetic: deep navy, monospace data, 
+   color-coded routes, surgical precision
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #080e1a;
+  --surface:     #0d1526;
+  --surface2:    #111e35;
+  --border:      #1e3050;
+  --border2:     #263d5e;
+  --text:        #dce8f5;
+  --text-dim:    #6a8aab;
+  --text-faint:  #3a5572;
+  --accent:      #3b9eff;
+  --accent-glow: rgba(59,158,255,0.18);
+  --green:       #22d98a;
+  --amber:       #f5a623;
+  --red:         #ff5c5c;
+
+  /* Route palette */
+  --r0: #3b9eff;
+  --r1: #ff9f3b;
+  --r2: #a855f7;
+
+  /* Stop palette (TSP/VRP — up to 10 stops) */
+  --s0:  #f43f5e;
+  --s1:  #fb923c;
+  --s2:  #facc15;
+  --s3:  #4ade80;
+  --s4:  #22d3ee;
+  --s5:  #818cf8;
+  --s6:  #e879f9;
+  --s7:  #f9a8d4;
+  --s8:  #86efac;
+  --s9:  #fde68a;
+
+  --sidebar-w: 280px;
+  --radius:    6px;
+  --font-ui:   'DM Sans', system-ui, sans-serif;
+  --font-mono: 'Space Mono', monospace;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-ui);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* ── Map ──────────────────────────────────────────────────── */
+#map {
+  position: absolute;
+  inset: 0;
+  left: var(--sidebar-w);
+}
+
+/* ── Sidebar ──────────────────────────────────────────────── */
+#sidebar {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 20;
+}
+
+/* scrollbar */
+#sidebar::-webkit-scrollbar { width: 4px; }
+#sidebar::-webkit-scrollbar-track { background: transparent; }
+#sidebar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* ── Brand ────────────────────────────────────────────────── */
+#brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 14px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand-icon {
+  font-size: 1.6rem;
+  color: var(--accent);
+  line-height: 1;
+  text-shadow: 0 0 12px var(--accent-glow);
+}
+
+.brand-title {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.04em;
+}
+
+.brand-sub {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: 1px;
+}
+
+/* ── Tab bar ──────────────────────────────────────────────── */
+#tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  padding: 9px 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab:hover  { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── Tab panels ───────────────────────────────────────────── */
+.tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  flex: 1;
+}
+.tab-panel.active { display: flex; }
+
+/* ── Typography helpers ───────────────────────────────────── */
+.instruction {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  line-height: 1.55;
+}
+
+.hint {
+  font-size: 0.68rem;
+  color: var(--text-faint);
+  line-height: 1.5;
+  margin-top: -6px;
+}
+
+label {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+/* ── Field row ────────────────────────────────────────────── */
+.field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ── Segmented group ──────────────────────────────────────── */
+.seg-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.seg {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.seg:hover  { border-color: var(--accent); color: var(--text); }
+.seg.active {
+  background: var(--accent-glow);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Range input ──────────────────────────────────────────── */
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.mono-val {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+}
+
+/* ── Button row ───────────────────────────────────────────── */
+.btn-row {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-action {
+  flex: 1;
+  padding: 9px 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.btn-action:hover   { opacity: 0.88; }
+.btn-action:active  { transform: scale(0.97); }
+.btn-action.picking {
+  background: var(--green);
+  animation: pulse-btn 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse-btn {
+  0%,100% { box-shadow: 0 0 0 0 rgba(34,217,138,0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(34,217,138,0); }
+}
+
+.btn-ghost {
+  padding: 9px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.btn-ghost:hover { border-color: var(--red); color: var(--red); }
+
+/* ── Pick status ──────────────────────────────────────────── */
+.pick-status {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  line-height: 2;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dot-start   { background: var(--green); }
+.dot-end     { background: var(--red); }
+.dot.placed  { box-shadow: 0 0 0 2px rgba(255,255,255,0.25); }
+
+/* ── Mono stat ────────────────────────────────────────────── */
+.mono-stat {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding: 4px 0;
+}
+
+/* ── Timer bar ────────────────────────────────────────────── */
+.timer-bar {
+  height: 3px;
+  background: var(--border2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.timer-bar.hidden { display: none; }
+
+#vrp-timer-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width linear;
+  border-radius: 2px;
+}
+
+/* ── Legend ───────────────────────────────────────────────── */
+.legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.7rem;
+}
+.legend.hidden { display: none; }
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.legend-swatch {
+  flex-shrink: 0;
+  width: 22px; height: 4px;
+  border-radius: 2px;
+}
+
+.legend-label { flex: 1; }
+
+.legend-stat {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  text-align: right;
+}
+
+/* ── Status bar ───────────────────────────────────────────── */
+#status-bar {
+  padding: 10px 14px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  min-height: 38px;
+  border-top: 1px solid var(--border);
+  word-break: break-word;
+  transition: background 0.2s, color 0.2s;
+  margin-top: auto;
+}
+
+.status-loading { background: #0b1f3a; color: #7dd3fc; }
+.status-success { background: #081f14; color: #86efac; }
+.status-warn    { background: #1f1400; color: #fcd34d; }
+.status-error   { background: #1f0808; color: #fca5a5; }
+.status-info    { color: var(--text-dim); }
+.status-pick    { background: #071a14; color: #6ee7b7;
+                  animation: blink-bg 1.8s ease-in-out infinite; }
+@keyframes blink-bg {
+  0%,100% { opacity: 1; } 50% { opacity: 0.7; }
+}
+
+/* ── Stop / route markers ─────────────────────────────────── */
+.stop-marker {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255,255,255,0.6);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  transition: transform 0.1s;
+  user-select: none;
+}
+.stop-marker:hover { transform: scale(1.25); }
+
+/* ── Layer switcher ───────────────────────────────────────── */
+.layer-switcher { display: flex; flex-direction: column; }
+.layer-switcher button {
+  width: 62px !important; height: 28px !important;
+  font-family: var(--font-ui) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  text-align: center !important;
+  padding: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid #cbd5e1 !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  color: #334155 !important;
+  cursor: pointer;
+  box-shadow: none !important;
+}
+.layer-switcher button:last-child { border-bottom: none !important; }
+.layer-switcher button.active,
+.layer-switcher button:hover { background: #e0f2fe !important; color: #0369a1 !important; }
+
+/* ── MapLibre popup tweaks ────────────────────────────────── */
+.maplibregl-popup-content {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  padding: 8px 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+.maplibregl-popup-tip { display: none; }
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 640px) {
+  :root { --sidebar-w: 100%; }
+  #map  { top: 230px; left: 0; bottom: 0; }
+  #sidebar { height: 230px; bottom: auto; border-right: none; border-bottom: 1px solid var(--border); }
+  #status-bar { display: none; }
+}

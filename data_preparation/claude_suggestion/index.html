@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Route Optimisation Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <div id="map"></div>
+
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <h1>🗺 Route Optimiser</h1>
+      <span id="job-count">Jobs: 0</span>
+    </div>
+
+    <section class="control-group">
+      <h2>Jobs</h2>
+      <button onclick="addRandomJob()">＋ Add Random Job</button>
+      <button onclick="addRandomJobs(5)">＋ Add 5 Random Jobs</button>
+      <button class="btn-secondary" onclick="clearMap()">🗑 Clear All</button>
+      <p class="hint">Or <strong>click the map</strong> to place a job.<br>
+         <strong>Shift+click</strong> to move the depot (green marker).</p>
+    </section>
+
+    <section class="control-group">
+      <h2>Routing</h2>
+      <button class="btn-primary" onclick="optimizeRoute()">⚡ Optimise Route (VROOM)</button>
+      <button onclick="routeAtoB()">➡ Route A → B (Valhalla)</button>
+    </section>
+
+    <section class="control-group">
+      <h2>Analysis</h2>
+      <button onclick="showIsochrone()">🕐 Show Isochrone (5/10/15 min)</button>
+      <button class="btn-secondary" onclick="clearIsochrone()">✕ Clear Isochrone</button>
+    </section>
+
+    <div id="status-bar"></div>
+  </div>
+
+  <script src="js/scripts.js"></script>
+  <script>
+    // Shift+click on map → move depot
+    window.addEventListener('load', () => {
+      // Short delay to ensure map is initialised
+      setTimeout(() => {
+        const mapEl = document.getElementById('map');
+        mapEl.addEventListener('click', (e) => {
+          if (e.shiftKey && window.map) {
+            const rect  = mapEl.getBoundingClientRect();
+            const point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            const ll    = window.map.unproject(point);
+            window._addDepotMarker([ll.lng, ll.lat]);
+            window.setStatus(`Depot moved to ${ll.lng.toFixed(5)}, ${ll.lat.toFixed(5)}`, 'success');
+          }
+        });
+      }, 500);
+    });
+  </script>
+
+</body>
+</html>

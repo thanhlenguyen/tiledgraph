@@ -1,0 +1,46 @@
+cliArgs:
+  geometry: true # retrieve geometry (-g) return encoded polyline geometry
+  planmode: false # run vroom in plan mode (-c) if set to true
+  threads: 4 # number of threads to use (-t)
+  explore: 5 # exploration level to use (0..5) (-x)
+  limit: '5mb' # max request size
+  logdir: '..' # the path for the logs relative to ./src
+  logsize: '100M' # max log file size for rotation
+  maxlocations: 1000 # max number of jobs/shipments locations
+  maxvehicles: 200 # max number of vehicles
+  override: ['c', 'g', 'l', 't', 'x'] # allow cli options override (c, g, l, t, and x)
+  path: '' # VROOM path (if not in $PATH)
+  port: 3000 # expressjs port
+  router: 'valhalla' # routing backend (osrm, libosrm, ors, or valhalla)
+  timeout: 300000 # milli-seconds
+  baseurl: '/' # base url for api
+
+routingServers:
+  valhalla:
+    auto:
+      host: 'valhalla'
+      port: '8002'
+    bicycle:
+      host: 'valhalla'
+      port: '8002'
+    pedestrian:
+      host: 'valhalla'
+      port: '8002'
+    motorcycle:
+      host: 'valhalla'
+      port: '8002'
+    motor_scooter:
+      host: 'valhalla'
+      port: '8002'
+    taxi:
+      host: 'valhalla'
+      port: '8002'
+    hov:
+      host: 'valhalla'
+      port: '8002'
+    truck:
+      host: 'valhalla'
+      port: '8002'
+    bus:
+      host: 'valhalla'
+      port: '8002'
