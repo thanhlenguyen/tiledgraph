@@ -1,0 +1,191 @@
+/* ============================================================
+   styles.css  —  Route Optimisation Demo
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --bg:        #0f172a;
+    --surface:   #1e293b;
+    --border:    #334155;
+    --text:      #f1f5f9;
+    --muted:     #94a3b8;
+    --accent:    #0ea5e9;
+    --green:     #22c55e;
+    --amber:     #f59e0b;
+    --red:       #ef4444;
+    --sidebar-w: 280px;
+    --radius:    8px;
+}
+
+html, body {
+    height: 100%;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+}
+
+/* ── Map ─────────────────────────────────────────────────── */
+#map {
+    position: absolute;
+    inset: 0;
+    left: var(--sidebar-w);
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+#sidebar {
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 16px;
+    overflow-y: auto;
+    z-index: 10;
+}
+
+#sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+#sidebar-header h1 {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+#job-count {
+    font-size: 0.75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2px 10px;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+/* ── Control groups ──────────────────────────────────────── */
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+}
+
+.control-group h2 {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 2px;
+}
+
+.hint {
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.5;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+button {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+button:hover { background: #1a2740; border-color: var(--accent); }
+
+button.btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+}
+button.btn-primary:hover { background: #0284c7; }
+
+button.btn-secondary { color: var(--muted); }
+button.btn-secondary:hover { color: var(--red); border-color: var(--red); }
+
+/* ── Status bar ──────────────────────────────────────────── */
+#status-bar {
+    margin-top: auto;
+    font-size: 0.78rem;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    min-height: 36px;
+    word-break: break-word;
+    background: transparent;
+    transition: background 0.2s;
+}
+
+.status-loading { background: #1e3a5f; color: #7dd3fc; }
+.status-success { background: #14532d; color: #86efac; }
+.status-warn    { background: #451a03; color: #fcd34d; }
+.status-error   { background: #450a0a; color: #fca5a5; }
+.status-info    { background: #1e293b; color: var(--muted); }
+
+/* ── Custom job marker ───────────────────────────────────── */
+.job-marker {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #ef4444;
+    border: 2px solid #fff;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    transition: transform 0.1s;
+}
+.job-marker:hover { transform: scale(1.2); }
+
+/* ── Layer switcher buttons ──────────────────────────────── */
+.layer-switcher {
+    display: flex;
+    flex-direction: column;
+}
+.layer-switcher button {
+    width: 64px !important;
+    height: 32px !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    text-align: center !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    border: none !important;
+    border-bottom: 1px solid var(--border) !important;
+    background: #fff !important;
+    color: #334155 !important;
+    cursor: pointer;
+}
+.layer-switcher button:last-child { border-bottom: none !important; }
+.layer-switcher button.active,
+.layer-switcher button:hover { background: #e0f2fe !important; }
+
+/* ── Responsive — narrow screens ────────────────────────── */
+@media (max-width: 600px) {
+    :root { --sidebar-w: 100%; }
+    #map { top: 220px; left: 0; bottom: 0; right: 0; height: auto; }
+    #sidebar { top: 0; height: 220px; width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex-direction: row; flex-wrap: wrap; overflow-x: auto; gap: 8px; }
+}

@@ -1,0 +1,480 @@
+{
+  "version": 8,
+  "name": "Satellite Imagery Style",
+  "metadata": {"maputnik:renderer": "mlgljs"},
+  "center": [46.6753, 24.7136],
+  "zoom": 6,
+  "sources": {
+    "esri-satellite": {
+      "type": "raster",
+      "tiles": [
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "tileSize": 256,
+      "attribution": "© Esri, Maxar, Earthstar Geographics"
+    },
+    "riyadh_satellite": {
+      "type": "raster",
+      "tiles": ["http://localhost:3000/riyadh_satellite/{z}/{x}/{y}"],
+      "minzoom": 12,
+      "maxzoom": 22
+    },    
+    "basemaps": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/basemaps/{z}/{x}/{y}"],
+      "minzoom": 1,
+      "maxzoom": 12,
+      "attribution": "© OvertureMaps"
+    },    
+    "administrative": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/administrative/{z}/{x}/{y}"],
+      "minzoom": 4,
+      "maxzoom": 12
+    },
+    "city_district_zone": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/city_district_zone/{z}/{x}/{y}"],
+      "minzoom": 9,
+      "maxzoom": 13
+    },
+    "address_layer": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/address_layer/{z}/{x}/{y}"],
+      "minzoom": 14,
+      "maxzoom": 15,
+      "attribution": "© National Address"
+    },
+    "street_centerline": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/street_centerline/{z}/{x}/{y}"],
+      "minzoom": 5,
+      "maxzoom": 15
+    },
+    "pois": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/topology.places/{z}/{x}/{y}"],
+      "minzoom": 12,
+      "maxzoom": 22
+    }
+  },
+  "sprite": "sprites/sprite",
+  "glyphs": "fonts/{fontstack}/{range}.pbf",
+  "layers": [
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {"background-color": "#000000"}
+    },
+    {
+      "id": "esri-satellite",
+      "type": "raster",
+      "source": "esri-satellite",
+      "minzoom": 0,
+      "maxzoom": 24,
+      "layout": {"visibility": "visible"}
+    },
+    {
+      "id": "riyadh_satellite",
+      "type": "raster",
+      "source": "riyadh_satellite",
+      "minzoom": 0,
+      "maxzoom": 24,
+      "layout": {"visibility": "visible"}
+    },
+    {
+      "id": "international-background",
+      "type": "line",
+      "source": "basemaps",
+      "source-layer": "international",
+      "layout": {},
+      "paint": {"line-width": 3, "line-color": "hsl(0, 40%, 65%)"}
+    },
+    {
+      "id": "international-boundary",
+      "type": "line",
+      "source": "basemaps",
+      "source-layer": "international",
+      "layout": {},
+      "paint": {
+          "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              4,
+              1.5,
+              10,
+              2
+          ],
+          "line-dasharray": [
+              "step",
+              ["zoom"],
+              ["literal", [2, 2]],
+              7,
+              ["literal", [6, 6, 2, 2]]
+          ],
+          "line-color": "hsl(0, 16%, 94%)"
+      }
+    },
+    {
+      "id": "emirate_bg",
+      "type": "line",
+      "source": "administrative",
+      "source-layer": "Emirate",
+      "minzoom": 4,
+      "maxzoom": 14,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {"line-color": "#d19999", "line-width": 2.5}
+    },
+    {
+      "id": "emirate-line",
+      "type": "line",
+      "source": "administrative",
+      "source-layer": "Emirate",
+      "minzoom": 4,
+      "maxzoom": 14,
+      "filter": ["all"],
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "line-color": {
+          "base": 1,
+          "stops": [[4, "#eee2e2"], [7, "#ffffff"]],
+          "type": "exponential"
+        },
+        "line-dasharray": {"stops": [[6, []], [10, []]]},
+        "line-width": {"stops": [[4, 1], [7, 1.5]], "base": 1}
+      }
+    },
+    {
+      "id": "emirate-label",
+      "type": "symbol",
+      "source": "administrative",
+      "source-layer": "Emirate_Label",
+      "minzoom": 3,
+      "maxzoom": 16,
+      "layout": {
+        "text-field": ["get", "EnglishName"],
+        "text-font": ["Open Sans Bold"],
+        "text-size": 14,
+        "text-anchor": "center",
+        "visibility": "visible"
+      },
+      "paint": {
+        "text-color": "#6c0404",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1,
+        "text-translate-anchor": "viewport"
+      }
+    },
+    {
+      "id": "governorate_bg",
+      "type": "line",
+      "source": "administrative",
+      "source-layer": "Governorate",
+      "minzoom": 6,
+      "maxzoom": 14,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {"line-color": "#d19999", "line-width": 2}
+    },
+    {
+      "id": "governorate-line",
+      "type": "line",
+      "source": "administrative",
+      "source-layer": "Governorate",
+      "minzoom": 6,
+      "maxzoom": 14,
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "line-color": {"stops": [[6, "#eee2e2"], [10, "#FFFFFF"]], "base": 1},
+        "line-width": {"stops": [[5, 0.75], [9, 1.3]], "base": 1},
+        "line-dasharray": {"stops": [[6, []], [10, []]]},
+        "line-opacity": 1
+      }
+    },
+    {
+      "id": "governorate-label",
+      "type": "symbol",
+      "source": "administrative",
+      "source-layer": "Governorate_Label",
+      "minzoom": 7,
+      "maxzoom": 16,
+      "layout": {
+        "text-field": ["get", "EnglishName"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": 12,
+        "text-anchor": "center",
+        "visibility": "visible"
+      },
+      "paint": {
+        "text-color": "#6c0404",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "city-line",
+      "type": "line",
+      "source": "city_district_zone",
+      "source-layer": "CityBoundary",
+      "minzoom": 9,
+      "maxzoom": 18,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {
+        "line-color": {"stops": [[9, "#eee2e2"], [12, "#FFFFFF"]], "base": 1},
+        "line-width": 1,
+        "line-dasharray": [3, 3, 3, 1, 1]
+      }
+    },
+    {
+      "id": "city-label",
+      "type": "symbol",
+      "source": "city_district_zone",
+      "source-layer": "CityCenter",
+      "minzoom": 10,
+      "maxzoom": 22,
+      "layout": {
+        "text-field": ["get", "EnglishName"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": 9,
+        "text-anchor": "center",
+        "visibility": "visible"
+      },
+      "paint": {
+        "text-halo-color": "#f0efef",
+        "text-halo-width": 1,
+        "text-color": "#6c0404"
+      }
+    },
+    {
+      "id": "citycenter-point",
+      "type": "symbol",
+      "source": "city_district_zone",
+      "source-layer": "CityCenter",
+      "minzoom": 11,
+      "layout": {"icon-image": "circle_11"},
+      "paint": {"icon-opacity": 1, "icon-color": "#F0EBEB"}
+    },
+    {
+      "id": "district-line",
+      "type": "line",
+      "source": "city_district_zone",
+      "source-layer": "District",
+      "minzoom": 8,
+      "maxzoom": 19,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {
+        "line-color": {"stops": [[9, "#eee2e2"], [12, "#ffffff"]]},
+        "line-width": 0.75,
+        "line-dasharray": [2, 2, 5, 2]
+      }
+    },
+    {
+      "id": "zone-line",
+      "type": "line",
+      "source": "city_district_zone",
+      "source-layer": "ZipCode",
+      "minzoom": 12,
+      "maxzoom": 22,
+      "layout": {"visibility": "visible", "line-join": "miter"},
+      "paint": {"line-color": "#a9f297", "line-width": 1}
+    },
+    {
+      "id": "zone-label",
+      "type": "symbol",
+      "source": "city_district_zone",
+      "source-layer": "ZipCode",
+      "minzoom": 12,
+      "maxzoom": 22,
+      "layout": {
+        "text-field": ["get", "SPZipCodeNo"],
+        "text-font": ["Open Sans Bold"],
+        "text-anchor": "center",
+        "text-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-padding": 5,
+        "visibility": "visible",
+        "text-size": 9
+      },
+      "paint": {
+        "text-color": "#ffffff",
+        "text-halo-color": "#e01515",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "street_Major",
+      "type": "line",
+      "source": "street_centerline",
+      "source-layer": "Street",
+      "minzoom": 10,
+      "filter": ["any", ["==", "Subtype", 3], ["==", "Subtype", 4]],
+      "layout": {
+        "line-cap": {"stops": [[0, "butt"], [16, "round"]]},
+        "line-join": {"stops": [[0, "miter"], [14, "round"]]}
+      },
+      "paint": {
+        "line-opacity": {"stops": [[12, 0.4], [16, 0]]},
+        "line-color": "#e6e6e6",
+        "line-width": {"stops": [[12, 0.5], [14, 2], [18, 18]], "base": 1}
+      }
+    },
+    {
+      "id": "street_Region",
+      "type": "line",
+      "source": "street_centerline",
+      "source-layer": "Street",
+      "minzoom": 5,
+      "filter": ["any", ["==", "Subtype", 1], ["==", "Subtype", 2]],
+      "layout": {
+        "line-cap": {"stops": [[0, "butt"], [16, "round"]]},
+        "line-join": {"stops": [[0, "miter"], [14, "round"]]}
+      },
+      "paint": {
+        "line-opacity": {"stops": [[12, 1], [16, 0]]},
+        "line-color": "#9F5E5E",
+        "line-width": {"stops": [[6, 0.75], [16, 12], [20, 32]], "base": 1}
+      }
+    },
+    {
+      "id": "street_Other",
+      "type": "line",
+      "source": "street_centerline",
+      "source-layer": "Street",
+      "minzoom": 13,
+      "paint": {
+        "line-opacity": {"stops": [[12, 1], [16, 0]]},
+        "line-color": "#e6e6e6",
+        "line-width": {"stops": [[12, 0.5], [14, 2], [18, 12]]}
+      }
+    },
+    {
+      "id": "street-label",
+      "type": "symbol",
+      "source": "street_centerline",
+      "source-layer": "Street",
+      "minzoom": 13,
+      "filter": ["none", ["==", "Subtype", 1], ["==", "Subtype", 2]],
+      "layout": {
+        "text-field": ["get", "EnglishName"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": {"stops": [[7, 9], [18, 12]]},
+        "symbol-placement": "line",
+        "text-max-angle": 30,
+        "text-rotation-alignment": "map",
+        "text-padding": 1,
+        "text-anchor": "center",
+        "visibility": "visible",
+        "text-letter-spacing": 0.01
+      },
+      "paint": {
+        "text-color": "#ffffff",
+        "text-halo-color": "#7f0b0b",
+        "text-halo-width": 1,
+        "text-translate-anchor": "viewport"
+      }
+    },
+    {
+      "id": "street_Major-label",
+      "type": "symbol",
+      "source": "street_centerline",
+      "source-layer": "Street",
+      "minzoom": 8,
+      "filter": ["any", ["==", "Subtype", 1], ["==", "Subtype", 2]],
+      "layout": {
+        "text-field": ["get", "EnglishName"],
+        "text-font": ["Open Sans Regular"],
+        "text-size": {"stops": [[7, 12], [18, 16]]},
+        "symbol-placement": "line",
+        "text-max-angle": 30,
+        "text-rotation-alignment": "map",
+        "text-padding": 1,
+        "text-anchor": "center",
+        "visibility": "visible",
+        "text-letter-spacing": 0.01
+      },
+      "paint": {
+        "text-color": "#ffffff",
+        "text-halo-color": "#7f0b0b",
+        "text-halo-width": 1,
+        "text-translate-anchor": "viewport"
+      }
+    },
+    {
+      "id": "ShortAdress",
+      "type": "fill",
+      "source": "address_layer",
+      "source-layer": "Short_Address",
+      "minzoom": 14,
+      "layout": {},
+      "paint": {
+        "fill-color": "hsla(56, 49%, 93%, 0.2)",
+        "fill-outline-color": "#b08282",
+        "fill-opacity": ["interpolate", ["linear"], ["zoom"], 0, 1, 22, 1]
+      }
+    },
+    {
+      "id": "address-line",
+      "type": "line",
+      "source": "address_layer",
+      "source-layer": "Short_Address",
+      "minzoom": 14,
+      "layout": {"visibility": "visible", "line-join": "round"},
+      "paint": {
+        "line-color": {"stops": [[9, "#b08282"], [12, "#B57373"]]},
+        "line-width": 1.5
+      }
+    },
+    {
+      "id": "address-label",
+      "type": "symbol",
+      "source": "address_layer",
+      "source-layer": "Short_Address",
+      "minzoom": 16,
+      "layout": {
+        "text-field": ["get", "ShortAddress"],
+        "text-font": ["Open Sans Regular"],
+        "text-anchor": "center",
+        "text-offset": [0, 1],
+        "visibility": "visible",
+        "text-size": 9
+      },
+      "paint": {
+        "text-color": "#5a3230",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1
+      }
+    },
+    {
+      "id": "poi-label",
+      "type": "symbol",
+      "source": "pois",
+      "source-layer": "topology.places",
+      "minzoom": 14,
+      "layout": {
+        "icon-image": ["concat", ["get", "osm_icon"], "_11"],
+        "icon-size": 1,
+        "icon-allow-overlap": true,
+        "text-field": ["get", "name"],
+        "text-font": ["Open Sans Regular"],
+        "text-anchor": "top",
+        "text-offset": [0, 0.6],
+        "visibility": "visible",
+        "text-size": 10
+      },
+      "paint": {
+        "text-color": [
+          "match",
+          ["get", "class"],
+          ["park_like"],
+          "#b1ff75",
+          "#ffffff"
+        ],
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1,
+        "icon-color": "#E1ED08",
+        "icon-halo-color": "#B92C2C"
+      }
+    }
+  ],
+  "id": "hb6xfug"
+}

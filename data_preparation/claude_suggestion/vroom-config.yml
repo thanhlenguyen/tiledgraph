@@ -1,0 +1,46 @@
+cliArgs:
+  geometry: true        # ← MUST be true to return encoded polyline geometry
+  planmode: false
+  threads: 4
+  explore: 5
+  limit: '5mb'
+  logdir: '..'
+  logsize: '100M'
+  maxlocations: 1000
+  maxvehicles: 200
+  override: ['c', 'g', 'l', 't', 'x']
+  path: ''
+  port: 3000
+  router: 'valhalla'
+  timeout: 300000
+  baseurl: '/'
+
+routingServers:
+  valhalla:
+    auto:
+      host: 'valhalla'
+      port: '8002'
+    bicycle:
+      host: 'valhalla'
+      port: '8002'
+    pedestrian:
+      host: 'valhalla'
+      port: '8002'
+    motorcycle:
+      host: 'valhalla'
+      port: '8002'
+    motor_scooter:
+      host: 'valhalla'
+      port: '8002'
+    taxi:
+      host: 'valhalla'
+      port: '8002'
+    hov:
+      host: 'valhalla'
+      port: '8002'
+    truck:
+      host: 'valhalla'
+      port: '8002'
+    bus:
+      host: 'valhalla'
+      port: '8002'

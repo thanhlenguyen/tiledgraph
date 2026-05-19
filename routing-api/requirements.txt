@@ -1,0 +1,8 @@
+# In your routing-api folder
+# flask
+# flask-cors
+fastapi
+uvicorn[standard]
+httpxd
+# psycopg2-binary
+# pydantic

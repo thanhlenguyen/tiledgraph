@@ -1,0 +1,142 @@
+# version: '3.9'
+
+services:
+  postgis:
+    image: postgis/postgis:16-3.5
+    container_name: postgis_db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - vsol:/var/lib/postgresql/data
+      - ./data:/data
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  martin:
+    image: ghcr.io/maplibre/martin:1.5.0
+    container_name: martin_server
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/martin-config.yml:/config.yml:ro
+      - ./data/mbtiles:/mbtiles:ro
+      - ./data/pmtiles:/pmtiles:ro
+      - ./styles:/styles:ro
+    command: --config /config.yml
+    depends_on:
+      postgis:
+        condition: service_healthy
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    container_name: valhalla
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      - tile_urls=
+      - use_tiles_ignore_pbf=False
+      - force_rebuild=False
+      - server_threads=4
+      - build_elevation=False
+      - build_admins=False
+      - build_time_zones=False
+      - build_tar=True
+    volumes:
+      - ./data/pbf:/custom_files
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
+  vroom:
+    image: ghcr.io/vroom-project/vroom-docker:latest
+    container_name: vroom
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    volumes:
+      - ./config/vroom-config.yml:/conf/config.yml:ro
+    environment:
+      - VROOM_ROUTER=valhalla
+    depends_on:
+      valhalla:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  routing-api:
+    build:
+      context: ./routing-api
+      dockerfile: Dockerfile
+    container_name: routing-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgis:
+        condition: service_healthy
+      valhalla:
+        condition: service_healthy
+      vroom:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:9.14.0
+    container_name: pgadmin4
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:-admin@admin.com}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgis
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: always
+    ports:
+      - "3001:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html
+      - ./data/pmtiles:/usr/share/nginx/html/pmtiles:ro
+      - ./data/sprites:/usr/share/nginx/html/sprites:ro
+      - ./data/fonts:/usr/share/nginx/html/fonts:ro
+      - ./styles:/usr/share/nginx/html/styles:ro
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - martin
+      - routing-api
+      - valhalla
+      - vroom
+
+volumes:
+  vsol:
