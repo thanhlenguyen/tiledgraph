@@ -188,6 +188,7 @@ label {
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
+  text-align: center;
 }
 .seg:hover  { border-color: var(--accent); color: var(--text); }
 .seg.active {
@@ -286,6 +287,42 @@ input[type="range"] {
 .dot-end     { background: var(--red); }
 .dot.placed  { box-shadow: 0 0 0 2px rgba(255,255,255,0.25); }
 
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 2;
+}
+
+.pick-swap-row {
+  display: flex;
+  justify-content: flex-start;
+  padding-left: 1px;
+  margin: -2px 0;
+}
+
+.btn-swap {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.btn-swap:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
 /* ── Mono stat ────────────────────────────────────────────── */
 .mono-stat {
   font-family: var(--font-mono);
@@ -340,7 +377,7 @@ input[type="range"] {
 
 .legend-stat {
   font-family: var(--font-mono);
-  font-size: 0.65rem;
+  font-size: 0.63rem;
   color: var(--text-dim);
   text-align: right;
 }

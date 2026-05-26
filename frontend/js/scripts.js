@@ -67,17 +67,17 @@ function enterMode(mode) {
 }
 function exitMode() { enterMode(MODE.NONE); }
 
-// ---------------------------------------------------------------------------
-// Map init
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// MAP INIT
+// ===========================================================================
 function initMap() {
   map = new maplibregl.Map({
     container: 'map',
     style:     STYLES[0].url,
     center:    currentCenter,
     zoom:      currentZoom,
-    pitch: currentPitch,
-    bearing: currentBearing,
+    pitch:     currentPitch,
+    bearing:   currentBearing,
     maxPitch:  85
   });
 
@@ -94,20 +94,20 @@ function initMap() {
 
   map.on('load', () => console.log('[map] loaded'));
 
-  // For subsequent style switches, 'styledata' is still used but guarded with
-  // a small idle-wait to ensure the new style is ready before layer restoration.
-  let _initialLoadDone = false;
-  map.once('idle', () => {
-    _initialLoadDone = true;
-    _restoreActiveLayers();
-  });
+  // // For subsequent style switches, 'styledata' is still used but guarded with
+  // // a small idle-wait to ensure the new style is ready before layer restoration.
+  // let _initialLoadDone = false;
+  // map.once('idle', () => {
+  //   _initialLoadDone = true;
+  //   _restoreActiveLayers();
+  // });
 
-  map.on('styledata', () => {
-    // Skip the very first styledata (handled by 'idle' above)
-    if (!_initialLoadDone) return;
-    // Wait for the new style to finish loading before restoring layers
-    map.once('idle', _restoreActiveLayers);
-  });
+  // map.on('styledata', () => {
+  //   // Skip the very first styledata (handled by 'idle' above)
+  //   if (!_initialLoadDone) return;
+  //   // Wait for the new style to finish loading before restoring layers
+  //   map.once('idle', _restoreActiveLayers);
+  // });
 
   map.on('click', (e) => {
     const ll = [e.lngLat.lng, e.lngLat.lat];
@@ -137,9 +137,9 @@ function _restoreActiveLayers() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Tab switching
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// TAB SWITCHING
+// ===========================================================================
 window.switchTab = (name) => {
   document.querySelectorAll('.tab').forEach(t =>
     t.classList.toggle('active', t.dataset.tab === name));
@@ -257,6 +257,18 @@ function _updateRoutePickStatus() {
     : 'End — click map';
 }
 
+window.routeSwapPoints = () => {
+  if (routeState.points.length < 2) return;          // nothing to swap yet
+  // Swap coordinates
+  [routeState.points[0], routeState.points[1]] = [routeState.points[1], routeState.points[0]];
+  // Swap markers on the map
+  const [mS, mE] = routeState.markers;
+  mS.setLngLat(routeState.points[0]);
+  mE.setLngLat(routeState.points[1]);
+  _updateRoutePickStatus();
+  _runRouteComparison();
+};
+
 async function _runRouteComparison() {
   setStatus('Computing 3 route alternatives…', 'loading');
   _routeRemoveLayers();
@@ -273,24 +285,29 @@ async function _runRouteComparison() {
   // The costing_options key must always be the costing profile name.
   // Normalize: always provide at least an empty object.
   const variants = [
+    // 0 — default fastest
     {
       locations: base, costing: p,
       costing_options: { [p]: {} },
       directions_options: { language: 'en-US' }
     },
+    // 1 — avoid highways / prefer local
     {
       locations: base, costing: p,
       costing_options: {
         [p]: p === 'auto'      ? { use_highways: 0.05, use_tolls: 0.0 }
            : p === 'bicycle'   ? { use_roads: 0.1, use_hills: 0.3 }
-           : p === 'pedestrian'? { use_roads: 0.1 }
+          //  : p === 'pedestrian'? { use_roads: 0.1 }
            :                     {}
       },
       directions_options: { language: 'en-US' }
     },
+    // 2 — shortest distance
     {
       locations: base, costing: p,
-      costing_options: { [p]: { shortest: true } },
+      costing_options: { [p]: p === 'auto'     ? { shortest: true }
+                                : p === 'bicycle'  ? { shortest: true }
+                                :                    { shortest: true } },
       directions_options: { language: 'en-US' }
     },
   ];
@@ -353,14 +370,14 @@ function _routeRemoveLayers() {
 }
 
 function _addRouteLayer(i, coordinates, color, dash) {
-  // Guard: remove if already exists (can happen on styledata restore)
-  if (map.getLayer(ROUTE_LYR(i)))  map.removeLayer(ROUTE_LYR(i));
-  if (map.getSource(ROUTE_SRC(i))) map.removeSource(ROUTE_SRC(i));
-
-  map.addSource(ROUTE_SRC(i), {
-    type: 'geojson',
-    data: { type: 'Feature', geometry: { type: 'LineString', coordinates } }
-  });
+  const geojson = { type: 'Feature', geometry: { type: 'LineString', coordinates } };
+  if (map.getSource(ROUTE_SRC(i))) {
+    // Source already exists (same style session) — update data in place, no flicker
+    map.getSource(ROUTE_SRC(i)).setData(geojson);
+    return;
+  }
+  // First draw or after a style switch: add from scratch
+  map.addSource(ROUTE_SRC(i), { type: 'geojson', data: geojson });
   map.addLayer({
     id: ROUTE_LYR(i), type: 'line', source: ROUTE_SRC(i),
     layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -524,14 +541,13 @@ async function _runVRP() {
     const idToStop = {};
     vrpState.stops.forEach(s => { idToStop[s.id] = s; });
 
-    // Build ordered lngLat list from VROOM's step sequence, not from coordinates.
-    // This avoids any floating-point comparison entirely.
-    const orderedStops = [vrpState.stops[0]]; // depot is always first
+    /// Build ordered visit list: [depot, stop_a, stop_b, …, (depot if VRP)]
+    let orderedLngLats = [depot];
     jobSteps.forEach(step => {
       const stop = idToStop[step.id];
-      if (stop) orderedStops.push(stop);
+      if (stop) orderedLngLats.push(stop.lngLat);
     });
-    if (!isTSP) orderedStops.push(vrpState.stops[0]); // return to depot
+    if (!isTSP) orderedLngLats.push(depot); // return to depot
 
     // ── Fetch individual segments from Valhalla ────────────
     // Each segment is colored by the color of the ORIGIN stop
@@ -540,16 +556,27 @@ async function _runVRP() {
 
     setStatus('Drawing route segments…', 'loading');
 
-    const segmentRequests = orderedStops.slice(0, -1).map((fromStop, i) => {
-      const toStop = orderedStops[i + 1];
-      // Color comes from the origin stop object directly — no coordinate search needed
-      return {
-        from:  fromStop.lngLat,
-        to:    toStop.lngLat,
-        color: fromStop.color,  // use stop object directly, not find()
-        index: i
-      };
-    });
+    const segmentRequests = [];
+    for (let i = 0; i < orderedLngLats.length - 1; i++) {
+      const from  = orderedLngLats[i];
+      const to    = orderedLngLats[i + 1];
+
+      // Origin stop color: for the leg from depot, use depot/first stop color
+      let color;
+      if (i === 0) {
+        // depot → first job: color of depot (first stop in VRP) or first stop in TSP
+        color = vrpState.stops[0].color;
+      } else {
+        // Find the stop at position `from`
+        const fromStop = vrpState.stops.find(s =>
+          Math.abs(s.lngLat[0] - from[0]) < 1e-8 &&
+          Math.abs(s.lngLat[1] - from[1]) < 1e-8
+        );
+        color = fromStop ? fromStop.color : STOP_COLORS[i % STOP_COLORS.length];
+      }
+
+      segmentRequests.push({ from, to, color, index: i });
+    }
 
     const segResults = await Promise.allSettled(
       segmentRequests.map(seg =>
@@ -652,13 +679,14 @@ function _vrpRemoveAllSegments() {
 }
 
 function _addVrpSegmentLayer(srcId, layerId, coordinates, color) {
-  if (map.getLayer(layerId)) map.removeLayer(layerId);
-  if (map.getSource(srcId))  map.removeSource(srcId);
-
-  map.addSource(srcId, {
-    type: 'geojson',
-    data: { type: 'Feature', geometry: { type: 'LineString', coordinates } }
-  });
+  const geojson = { type: 'Feature', geometry: { type: 'LineString', coordinates } };
+  if (map.getSource(srcId)) {
+    // Source exists — update data in place to avoid flicker
+    map.getSource(srcId).setData(geojson);
+    return;
+  }
+  // First draw or after a style switch: add from scratch
+  map.addSource(srcId, { type: 'geojson', data: geojson });
   map.addLayer({
     id: layerId, type: 'line', source: srcId,
     layout: { 'line-join': 'round', 'line-cap': 'round' },
@@ -749,16 +777,15 @@ async function isoHandleClick(lngLat) {
   // but Valhalla docs say ascending is fine — use ascending.
   const contours = [];
   for (let i = 1; i <= levels; i++) {
-    contours.push({
-      time:  i * isoInterval,
-      color: ISO_COLORS[i - 1].replace('#', '')  // Valhalla wants no # prefix
-    });
+    const t     = i * isoInterval;
+    // Color index 0 = innermost (smallest time)
+    const color = ISO_COLORS[i - 1].replace('#', '');
+    contours.push({ time: t, color });
   }
 
   setStatus(`Computing ${levels}-level isochrone (${isoInterval} min intervals)…`, 'loading');
 
   const payload = {
-    // FIX S1 (also applies here): use {lat, lon} objects
     locations: [{ lat: lngLat[1], lon: lngLat[0] }],
     costing:   isoProfile,
     contours,
@@ -770,15 +797,15 @@ async function isoHandleClick(lngLat) {
   try {
     const geojson = await fetchJSON(API.isochrone, payload);
 
-    // Valhalla returns color as a hex string without '#' in feature properties.
-    // Re-inject '#' so MapLibre's ['get', 'color'] paint expression works.
-    if (geojson?.features) {
-      geojson.features.forEach(f => {
-        if (f.properties?.color && !f.properties.color.startsWith('#')) {
-          f.properties.color = '#' + f.properties.color;
-        }
-      });
-    }
+    // // Valhalla returns color as a hex string without '#' in feature properties.
+    // // Re-inject '#' so MapLibre's ['get', 'color'] paint expression works.
+    // if (geojson?.features) {
+    //   geojson.features.forEach(f => {
+    //     if (f.properties?.color && !f.properties.color.startsWith('#')) {
+    //       f.properties.color = '#' + f.properties.color;
+    //     }
+    //   });
+    // }
 
     isoState.geojson = geojson;
     _isoRemoveLayers();
@@ -806,9 +833,12 @@ async function isoHandleClick(lngLat) {
 }
 
 function _renderIso(geojson) {
-  if (map.getLayer(ISO_BORDER)) map.removeLayer(ISO_BORDER);
-  if (map.getLayer(ISO_FILL))   map.removeLayer(ISO_FILL);
-  if (map.getSource(ISO_SRC))   map.removeSource(ISO_SRC);
+  if (map.getSource(ISO_SRC)) {
+    // Update data in place — no layer flicker
+    map.getSource(ISO_SRC).setData(geojson);
+    return;
+  }
+  // First draw or after a style switch: add from scratch
 
   map.addSource(ISO_SRC, { type: 'geojson', data: geojson });
   map.addLayer({
@@ -843,11 +873,18 @@ class LayerSwitcherControl {
         this._container.querySelectorAll('button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         map.setStyle(s.url);
+        // Wait for the new style to be fully loaded and idle before doing anything.
+        // We use two idle calls: the first to easeTo (which itself triggers rendering),
+        // the second to restore layers after the camera animation settles.
         map.once('idle', () => {
           map.easeTo({
             center: currentCenter, zoom: s.zoom ?? currentZoom,
             pitch: s.pitch ?? currentPitch, bearing: s.bearing ?? currentBearing,
-            duration: 900
+            duration: 800
+          });
+          // Wait for the easeTo animation to finish, then restore layers
+          map.once('idle', () => {
+            _restoreActiveLayers();
           });
         });
       });
