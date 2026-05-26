@@ -75,7 +75,9 @@ function initMap() {
     container: 'map',
     style:     STYLES[0].url,
     center:    currentCenter,
-    zoom:      currentZoom, pitch: currentPitch, bearing: currentBearing,
+    zoom:      currentZoom,
+    pitch: currentPitch,
+    bearing: currentBearing,
     maxPitch:  85
   });
 
@@ -92,11 +94,19 @@ function initMap() {
 
   map.on('load', () => console.log('[map] loaded'));
 
-  // After a style change, re-draw whatever is currently active
-  map.on('styledata', () => {
-    // styledata fires on initial load too — skip if map not fully loaded
-    if (!map.isStyleLoaded()) return;
+  // For subsequent style switches, 'styledata' is still used but guarded with
+  // a small idle-wait to ensure the new style is ready before layer restoration.
+  let _initialLoadDone = false;
+  map.once('idle', () => {
+    _initialLoadDone = true;
     _restoreActiveLayers();
+  });
+
+  map.on('styledata', () => {
+    // Skip the very first styledata (handled by 'idle' above)
+    if (!_initialLoadDone) return;
+    // Wait for the new style to finish loading before restoring layers
+    map.once('idle', _restoreActiveLayers);
   });
 
   map.on('click', (e) => {
@@ -254,26 +264,35 @@ async function _runRouteComparison() {
   document.getElementById('route-legend').classList.add('hidden');
 
   const [S, E] = routeState.points;
-  const base   = [{ lon: S[0], lat: S[1] }, { lon: E[0], lat: E[1] }];
-  const p      = routeProfile;
+  const base = [
+    { lat: S[1], lon: S[0] },
+    { lat: E[1], lon: E[0] }
+  ];
+  const p     = routeProfile;
 
+  // The costing_options key must always be the costing profile name.
+  // Normalize: always provide at least an empty object.
   const variants = [
-    // 0 — default fastest
-    { locations: base, costing: p,
+    {
+      locations: base, costing: p,
       costing_options: { [p]: {} },
-      directions_options: { language: 'en-US' } },
-    // 1 — avoid highways / prefer local
-    { locations: base, costing: p,
-      costing_options: { [p]: p === 'auto'     ? { use_highways: 0.05, use_tolls: 0.0 }
-                                : p === 'bicycle'  ? { use_roads: 0.1, use_hills: 0.3 }
-                                :                    {} },
-      directions_options: { language: 'en-US' } },
-    // 2 — shortest distance
-    { locations: base, costing: p,
-      costing_options: { [p]: p === 'auto'     ? { shortest: true }
-                                : p === 'bicycle'  ? { shortest: true }
-                                :                    { shortest: true } },
-      directions_options: { language: 'en-US' } },
+      directions_options: { language: 'en-US' }
+    },
+    {
+      locations: base, costing: p,
+      costing_options: {
+        [p]: p === 'auto'      ? { use_highways: 0.05, use_tolls: 0.0 }
+           : p === 'bicycle'   ? { use_roads: 0.1, use_hills: 0.3 }
+           : p === 'pedestrian'? { use_roads: 0.1 }
+           :                     {}
+      },
+      directions_options: { language: 'en-US' }
+    },
+    {
+      locations: base, costing: p,
+      costing_options: { [p]: { shortest: true } },
+      directions_options: { language: 'en-US' }
+    },
   ];
 
   const DASHES = [
@@ -291,7 +310,10 @@ async function _runRouteComparison() {
   let drawn = 0;
 
   results.forEach((res, i) => {
-    if (res.status !== 'fulfilled') { console.warn(`Route ${i} failed:`, res.reason); return; }
+    if (res.status !== 'fulfilled') {
+      console.warn(`Route ${i} failed:`, res.reason);
+      return;
+    }
     const trip = res.value?.trip;
     if (!trip) return;
 
@@ -498,16 +520,18 @@ async function _runVRP() {
     const jobSteps = route.steps?.filter(s => s.type === 'job') ?? [];
 
     // Map job id → stop color
+    // Build a lookup map by stop id (id is set by us above as s.id = idx+1).
     const idToStop = {};
     vrpState.stops.forEach(s => { idToStop[s.id] = s; });
 
-    // Build ordered visit list: [depot, stop_a, stop_b, …, (depot if VRP)]
-    let orderedLngLats = [depot];
+    // Build ordered lngLat list from VROOM's step sequence, not from coordinates.
+    // This avoids any floating-point comparison entirely.
+    const orderedStops = [vrpState.stops[0]]; // depot is always first
     jobSteps.forEach(step => {
       const stop = idToStop[step.id];
-      if (stop) orderedLngLats.push(stop.lngLat);
+      if (stop) orderedStops.push(stop);
     });
-    if (!isTSP) orderedLngLats.push(depot); // return to depot
+    if (!isTSP) orderedStops.push(vrpState.stops[0]); // return to depot
 
     // ── Fetch individual segments from Valhalla ────────────
     // Each segment is colored by the color of the ORIGIN stop
@@ -516,32 +540,24 @@ async function _runVRP() {
 
     setStatus('Drawing route segments…', 'loading');
 
-    const segmentRequests = [];
-    for (let i = 0; i < orderedLngLats.length - 1; i++) {
-      const from  = orderedLngLats[i];
-      const to    = orderedLngLats[i + 1];
-
-      // Origin stop color: for the leg from depot, use depot/first stop color
-      let color;
-      if (i === 0) {
-        // depot → first job: color of depot (first stop in VRP) or first stop in TSP
-        color = vrpState.stops[0].color;
-      } else {
-        // Find the stop at position `from`
-        const fromStop = vrpState.stops.find(s =>
-          Math.abs(s.lngLat[0] - from[0]) < 1e-8 &&
-          Math.abs(s.lngLat[1] - from[1]) < 1e-8
-        );
-        color = fromStop ? fromStop.color : STOP_COLORS[i % STOP_COLORS.length];
-      }
-
-      segmentRequests.push({ from, to, color, index: i });
-    }
+    const segmentRequests = orderedStops.slice(0, -1).map((fromStop, i) => {
+      const toStop = orderedStops[i + 1];
+      // Color comes from the origin stop object directly — no coordinate search needed
+      return {
+        from:  fromStop.lngLat,
+        to:    toStop.lngLat,
+        color: fromStop.color,  // use stop object directly, not find()
+        index: i
+      };
+    });
 
     const segResults = await Promise.allSettled(
       segmentRequests.map(seg =>
         fetchJSON(API.route, {
-          locations: [{ lon: seg.from[0], lat: seg.from[1] }, { lon: seg.to[0], lat: seg.to[1] }],
+          locations: [
+            { lat: seg.from[1], lon: seg.from[0] },
+            { lat: seg.to[1],   lon: seg.to[0]   }
+          ],
           costing:   vrpProfile,
           directions_options: { language: 'en-US' }
         }).then(r => ({ ...seg, trip: r.trip }))
@@ -733,16 +749,17 @@ async function isoHandleClick(lngLat) {
   // but Valhalla docs say ascending is fine — use ascending.
   const contours = [];
   for (let i = 1; i <= levels; i++) {
-    const t     = i * isoInterval;
-    // Color index 0 = innermost (smallest time)
-    const color = ISO_COLORS[i - 1].replace('#', '');
-    contours.push({ time: t, color });
+    contours.push({
+      time:  i * isoInterval,
+      color: ISO_COLORS[i - 1].replace('#', '')  // Valhalla wants no # prefix
+    });
   }
 
   setStatus(`Computing ${levels}-level isochrone (${isoInterval} min intervals)…`, 'loading');
 
   const payload = {
-    locations: [{ lon: lngLat[0], lat: lngLat[1] }],
+    // FIX S1 (also applies here): use {lat, lon} objects
+    locations: [{ lat: lngLat[1], lon: lngLat[0] }],
     costing:   isoProfile,
     contours,
     polygons:  true,
@@ -752,6 +769,17 @@ async function isoHandleClick(lngLat) {
 
   try {
     const geojson = await fetchJSON(API.isochrone, payload);
+
+    // Valhalla returns color as a hex string without '#' in feature properties.
+    // Re-inject '#' so MapLibre's ['get', 'color'] paint expression works.
+    if (geojson?.features) {
+      geojson.features.forEach(f => {
+        if (f.properties?.color && !f.properties.color.startsWith('#')) {
+          f.properties.color = '#' + f.properties.color;
+        }
+      });
+    }
+
     isoState.geojson = geojson;
     _isoRemoveLayers();
     _renderIso(geojson);
@@ -815,8 +843,7 @@ class LayerSwitcherControl {
         this._container.querySelectorAll('button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         map.setStyle(s.url);
-        // styledata event will call _restoreActiveLayers()
-        map.once('styledata', () => {
+        map.once('idle', () => {
           map.easeTo({
             center: currentCenter, zoom: s.zoom ?? currentZoom,
             pitch: s.pitch ?? currentPitch, bearing: s.bearing ?? currentBearing,

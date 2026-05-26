@@ -438,21 +438,8 @@ OSM XML / PBF (for Valhalla)
 |              | tunnel          | yes                                                          | Critical for GPS-loss logic and display.                                |
 
 ```
-- Use python with DuckDB to transform source to osm format
-```
-  python build_osm_topology.py <input_file> <output.osm> [tile_size_deg [memory_gb]]
+- Use python with DuckDB to transform source to osm format but fail, but if we want to use `parquet` file we can convert with `duckdb`
 
-  input_file    : GeoJSON, SHP, GPKG, or Parquet (.parquet)
-                  Parquet is fastest: columnar, compressed, no GDAL overhead.
-                  Convert once with: ogr2ogr -f Parquet out.parquet in.gpkg
-                  OR in DuckDB: COPY (SELECT ...) TO 'out.parquet' (FORMAT PARQUET)
-  tile_size_deg : default 0.02 (≈ 2 km). Use 0.05 for sparse, 0.01 for dense cities.
-  memory_gb     : default 8. Set to ~60-70% of available RAM (`free -h`).
-
-NEXT STEP
-  osmium cat output.osm -o output.osm.pbf
-```
-or Use `duckdb` to convert from spatial file to `parquet`
 ```sql
 INSTALL spatial;
 LOAD spatial;
@@ -464,10 +451,149 @@ COPY (
 TO 'street_ksa1.parquet'
 (FORMAT PARQUET, COMPRESSION ZSTD);
 ```
+#### Use ogr2osm to convert geo spatial file to osm file
+1. Install tools
+```bash
+# install ogr2osm
+sudo apt install python3-gdal gdal-bin
+python3 -m venv env
+source env/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install GDAL==3.11.4
+pip install git+https://github.com/roelderickx/ogr2osm.git --no-deps
+pip install osmium
+```
+2. Prepare translate file
+street_translate.py:
+```python
+import ogr2osm
 
-`python build_osm_topology.py street_ksa.parquet street_ksa.osm 0.015`
-Some parameter for this script:
-- Tile size 0.015 (about: 1667 meters)
-- Overlap: 1 (100%)
+class StreetsTranslation(ogr2osm.TranslationBase):
 
-`osmium cat street_ksa.osm -o street_ksa.osm.pbf`
+    def filter_tags(self, tags):
+        if not tags:
+            return tags
+
+        osm_tags = {}
+
+        # === Names ===
+        if tags.get('ArabicName'):
+            osm_tags['name:ar'] = str(tags['ArabicName']).strip()
+
+        if tags.get('EnglishName'):
+            osm_tags['name'] = str(tags['EnglishName']).strip()
+
+        if tags.get('Strar'):
+            osm_tags['name:ar1'] = str(tags['Strar']).strip()   # alternative Arabic
+
+        if tags.get('Stren'):
+            osm_tags['name:en1'] = str(tags['Stren']).strip()   # alternative English
+
+        # === Highway (the most important field) ===
+        if tags.get('Subtype') is not None and tags.get('FOW') is not None:
+            subtype = str(tags['Subtype']).strip()
+            fowi = str(tags['FOW']).strip()
+            nolanes = tags.get('NoofLane')
+
+            try:
+                subtype = int(float(subtype))
+                fowi = int(float(fowi))
+            except (ValueError, TypeError):
+                subtype = 0
+                fowi = 0
+
+            if fowi in (3, 4):  # Link roads
+                if subtype == 1:
+                    osm_tags['highway'] = 'trunk_link'
+                elif subtype == 2:
+                    osm_tags['highway'] = 'primary_link'
+                elif subtype == 3:
+                    osm_tags['highway'] = 'secondary_link'
+                else:
+                    osm_tags['highway'] = 'tertiary_link'
+            else:  # Normal roads
+                if subtype == 1:
+                    osm_tags['highway'] = 'trunk'
+                elif subtype == 2:
+                    osm_tags['highway'] = 'primary'
+                elif subtype == 3:
+                    osm_tags['highway'] = 'primary' if (nolanes and int(float(nolanes or 0)) > 3) else 'secondary'
+                elif subtype == 4:
+                    osm_tags['highway'] = 'secondary' if (nolanes and int(float(nolanes or 0)) > 3) else 'tertiary'
+                elif subtype == 5:
+                    osm_tags['highway'] = 'tertiary'
+                elif subtype == 6:
+                    osm_tags['highway'] = 'residential'
+                elif subtype == 7:
+                    osm_tags['highway'] = 'footway'
+                else:
+                    osm_tags['highway'] = 'road'
+
+        # === Other attributes ===
+        if tags.get('Width'):
+            osm_tags['width'] = str(tags['Width']).strip()
+
+        if tags.get('NoOfLane'):
+            osm_tags['lanes'] = str(tags['NoOfLane']).strip()
+
+        if tags.get('SpeedLimit'):
+            osm_tags['maxspeed'] = str(tags['SpeedLimit']).strip()
+
+        # Oneway
+        if tags.get('Direction') is not None:
+            try:
+                cent = int(float(tags['Direction']))
+                osm_tags['oneway'] = 'yes' if cent == 1 else 'no'
+            except:
+                pass
+
+        # Junction
+        if tags.get('FOW') is not None:
+            try:
+                fowi = int(float(tags['FOW']))
+                if fowi == 1:
+                    osm_tags['junction'] = 'roundabout'
+            except:
+                pass
+
+        # Access
+        if tags.get('Status') is not None:
+            try:
+                stat = int(float(tags['Status']))
+                osm_tags['access'] = 'no' if stat == 3 else 'yes'
+            except:
+                pass
+
+        # Surface
+        if tags.get('Status') is not None:
+            try:
+                stat = int(float(tags['Status']))
+                if stat == 2:
+                    osm_tags['surface'] = 'gravel'
+                elif stat == 3:
+                    osm_tags['surface'] = 'dirt'
+                else:
+                    osm_tags['surface'] = 'asphalt'
+            except:
+                osm_tags['surface'] = 'asphalt'
+
+        # === Metadata ===
+        osm_tags['source'] = 'Your Dataset Name'   # ← Change this
+        if tags.get('pkStreetID'):
+            osm_tags['orig_id'] = str(tags['pkStreetID']).strip()
+
+        # Optional: keep any other useful fields that weren't mapped
+        for k, v in tags.items():
+            if v and k not in ['ArabicName', 'EnglishName', 'Strar', 'Stren', 'Width',
+                             'NoOfLane', 'SpeedLimit', 'Direction', 'FOW',
+                             'Status', 'Subtype', 'pkStreetID'] and k not in osm_tags:
+                osm_tags[k.lower()] = str(v).strip()
+
+        return osm_tags
+```
+3. Convertion
+```bash
+ogr2osm Street_centerline_new.gpkg -t street_translation.py -o street_ksa.osm
+osmium cat street_ksa.osm -o street_ksa.osm.pbf
+```
+Note: ogr2osm does not sort data, so we cannot import to Valhalla

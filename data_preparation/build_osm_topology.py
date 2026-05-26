@@ -7,14 +7,31 @@ into a valid OSM XML file for osmium/osmconvert → OSM PBF
 
 DESIGNED FOR LARGE FILES (country-scale, millions of segments).
 
-USAGE
-  python build_osm_topology.py <input_file> <output.osm> [tile_size_deg [memory_gb]]
+APPROACH
+  Inspired by ogr2osm: every source feature becomes OSM nodes + a way directly.
+  Nodes are deduplicated by rounding coordinates to ROUNDING_DIGITS decimal
+  places. No ST_Node, no tiling, no OOM risk. Nothing is dropped.
 
-  input_file    : GeoJSON, SHP, GPKG, or Parquet (.parquet)
+  1. Read every geometry → extract all vertices → round coordinates
+  2. Deduplicate vertices (same rounded coord = same OSM node)
+  3. Write each feature as a <way> referencing its node IDs in order
+  4. Write all unique <node> elements
+
+CONNECTIVITY PIPELINE (Steps 7a → 7c)
+  7a. Node-to-node snap (two passes):
+        Pass 1 — all endpoints, tight tolerance (~2 m)
+        Pass 2 — dangling endpoints only, wide tolerance (~11 m)
+  7b. Point-to-edge snap:
+        Dangling endpoint near a road segment but far from its nodes →
+        project endpoint perpendicularly onto segment → split segment →
+        insert shared node.  Fixes T-junctions and roundabout spokes.
+  7c. Final degenerate-way cleanup
+
+USAGE
+  python build_osm_topology.py <input_file> <output.osm> [memory_gb]
                   Parquet is fastest: columnar, compressed, no GDAL overhead.
                   Convert once with: ogr2ogr -f Parquet out.parquet in.gpkg
                   OR in DuckDB: COPY (SELECT ...) TO 'out.parquet' (FORMAT PARQUET)
-  tile_size_deg : default 0.015 (≈ 1.6 km). Use 0.05 for sparse, 0.01 for dense cities.
   memory_gb     : default 8. Set to ~60-70% of available RAM (`free -h`).
 
 NEXT STEP
@@ -25,11 +42,11 @@ DEPENDENCIES
 """
 
 import gc
-import time
-import math
 import os
 import sys
+import time
 import logging
+from datetime import datetime
 
 import duckdb
 from lxml import etree
@@ -43,17 +60,17 @@ from tqdm import tqdm
 #   • TqdmLoggingHandler (INFO+) — routes through tqdm.write() so progress
 #     bars are never clobbered by a stray logger.info() call
 # ─────────────────────────────────────────────────────────────────────────────
-LOG_FILE = "build_osm_topology.log"
-
 
 class _TqdmHandler(logging.StreamHandler):
-    """StreamHandler that uses tqdm.write() to avoid breaking progress bars."""
+    """Routes log records through tqdm.write() so progress bars are not broken."""
     def emit(self, record):
         try:
             tqdm.write(self.format(record))
         except Exception:
             self.handleError(record)
 
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+LOG_FILE = f"build_osm_topology_{timestamp}.log"
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -65,7 +82,6 @@ _console = _TqdmHandler(sys.stdout)
 _console.setLevel(logging.INFO)
 _console.setFormatter(logging.Formatter("%(levelname)-8s %(message)s"))
 logging.getLogger().addHandler(_console)
-
 logger = logging.getLogger(__name__)
 
 
@@ -77,26 +93,30 @@ def _elapsed(t0: float) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
-# Minimum segment length after noding.  Pieces shorter than this are slivers
-# produced by floating-point snap and are discarded.  ≈ 1 m at equator.
-MIN_SEG_LEN_DEG  = 9e-6
 
-# Endpoint snap tolerance for cross-boundary gap healing (Step 3b).
-# 1e-5 deg ≈ 1.1 m.  Raise to 5e-5 (≈ 5 m) if your data has larger gaps.
-SNAP_TOLERANCE   = 1e-5
+# Coordinate rounding precision — same default as ogr2osm (7 decimal places).
+# Two vertices rounded to the same value become one shared OSM node.
+# 7 digits ≈ 1.1 cm precision at equator — fine for road networks.
+# Increase to 8 for sub-centimetre data; decrease to 6 (≈11 cm) if your
+# source data has many near-duplicate coordinates that should merge.
+ROUNDING_DIGITS = 7
 
-# Precision grid for ST_ReducePrecision.  Must equal SNAP_TOLERANCE so that
-# snapped coordinates land exactly on the same grid node.
-PRECISION_GRID   = 1e-5
+# Drop source segments with more than this many vertices.
+# Segments with 10k+ vertices are data artifacts that cause slow processing.
+MAX_VERTICES = 10_000
 
-# Tile overlap — 100% guarantees corner intersections are always noded together.
-OVERLAP_FACTOR   = 1
+# ── Connectivity tolerances ──────────────────────────────────────────────────
+# Node-to-node snap, pass 1 — ALL way endpoints (catches float drift).
+SNAP_TOL_TIGHT_DEG  = 0.00002   # ~2 m
 
-# Flush noded_segments to disk every N tiles to keep RAM flat.
-CHECKPOINT_EVERY = 500
+# Node-to-node snap, pass 2 — DANGLING endpoints only (catches larger gaps,
+# roundabout spokes, region-split offsets).
+SNAP_TOL_WIDE_DEG   = 0.00005   # ~11 m
 
-# Drop pathological high-vertex segments before noding to avoid OOM.
-MAX_VERTICES     = 10_000
+# Point-to-edge snap — dangling endpoint projected onto nearest segment.
+# Larger than node-to-node because the segment may be far from any node.
+EDGE_SNAP_TOL_DEG   = 0.00005   # ~17 m — endpoint projected onto nearest segment
+ENDPOINT_SNAP_TOL_DEG = 0.00002  # ~1 m  — tight endpoint-to-endpoint final pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HIGHWAY CLASSIFICATION
@@ -119,11 +139,13 @@ END
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _read_input()
+# STEP 1 — INGEST
 # ─────────────────────────────────────────────────────────────────────────────
 def _read_input(con: duckdb.DuckDBPyConnection, input_file: str) -> bool:
     """
-    Ingest the input file into raw_segments (id, name, oneway, lanes,
+    Ingest into raw_segments, assigning a globally unique surrogate integer id
+    via ROW_NUMBER() — replacing pkStreetID as the primary key
+    the input file into raw_segments (id, name, oneway, lanes,
     maxspeed, highway, geom_wkb).
 
     Parquet path:
@@ -152,7 +174,10 @@ def _read_input(con: duckdb.DuckDBPyConnection, input_file: str) -> bool:
         con.execute(f"""
             CREATE OR REPLACE TABLE raw_segments AS
             SELECT
-                pkStreetID                                          AS id,
+                -- Surrogate key: row number is globally unique even when
+                -- pkStreetID repeats across regions in the same file.
+                ROW_NUMBER() OVER ()                                AS id,
+                pkStreetID                                          AS orig_id,
                 EnglishName                                         AS name,
                 CASE WHEN Direction = 1 THEN 'yes' ELSE 'no' END   AS oneway,
                 CASE
@@ -168,7 +193,7 @@ def _read_input(con: duckdb.DuckDBPyConnection, input_file: str) -> bool:
                 -- GeoParquet stores geometry as WKB bytes — read as-is, no parsing
                 geom                                            AS geom_wkb
             FROM read_parquet('{input_file}')
-            WHERE geom IS NOT NULL;
+            WHERE geom IS NOT NULL AND fkEmirateID = 4;
         """)
         return True   # geometry column is already GEOMETRY type
     else:
@@ -177,7 +202,8 @@ def _read_input(con: duckdb.DuckDBPyConnection, input_file: str) -> bool:
         con.execute(f"""
             CREATE OR REPLACE TABLE raw_segments AS
             SELECT
-                pkStreetID                                          AS id,
+                ROW_NUMBER() OVER ()                                AS id,
+                pkStreetID                                          AS orig_id,
                 EnglishName                                         AS name,
                 CASE WHEN Direction = 1 THEN 'yes' ELSE 'no' END   AS oneway,
                 CASE
@@ -196,464 +222,602 @@ def _read_input(con: duckdb.DuckDBPyConnection, input_file: str) -> bool:
         """)
         return False  # geometry column is raw WKB bytes
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# _snap_boundary_endpoints()
-#
-# NEW STEP 3b — heal cross-region boundary gaps before noding.
-#
-# Street datasets split by administrative region often have endpoints that
-# are "close but not touching": coordinates differ by < 1 m due to independent
-# digitisation or coordinate precision in each region.  ST_Node does NOT create
-# a shared node for two lines that merely come close — they must intersect
-# exactly.  This step moves such near-miss endpoint pairs to their shared
-# midpoint so that noding produces a connected graph across every boundary.
-#
-# Algorithm
-# ─────────
-# 1. Extract start + end point of every segment into _endpoints.
-# 2. Self-join on a bounding-box predicate (ABS dx < tol AND ABS dy < tol)
-#    to find candidate pairs.  Refine with ST_Distance to avoid false positives
-#    caused by the rectangular bbox test.
-# 3. Compute the midpoint of each pair as the canonical snapped coordinate.
-# 4. Apply snaps: for each affected segment, replace its start and/or end
-#    vertex with the midpoint coordinate using ST_SetPoint.
-# 5. Re-materialise seg_geoms with the updated geometries.
-#
-# ST_SetPoint index convention (DuckDB spatial):
-#   0  = first vertex (start point)
-#  -1  = last vertex  (end point)
-#
-# Performance
-# ───────────
-# The self-join uses two ABS comparisons on plain FLOAT columns rather than a
-# spatial index.  For 1-2 M segments the Cartesian product is pruned extremely
-# aggressively by the bbox predicate (only adjacent-region pairs survive) and
-# typically runs in < 60 s.  If it is slow, add a DuckDB ART index on x, y.
+# HELPER — dangling endpoint table
 # ─────────────────────────────────────────────────────────────────────────────
-def _snap_boundary_endpoints(con: duckdb.DuckDBPyConnection) -> None:
-    t = time.time()
-    logger.info("🔧  Step 3b · Snapping near-miss endpoints across region boundaries …")
-    logger.info("   Snap tolerance: %.1e deg (≈ %.1f m)", SNAP_TOLERANCE, SNAP_TOLERANCE * 111_111)
 
-    # ── 1. Extract all endpoints ──────────────────────────────────────────────
-    con.execute("""
-        CREATE OR REPLACE TABLE _endpoints AS
-        SELECT
-            id,
-            1                           AS pt_pos,   -- 1 = start
-            ST_StartPoint(geom)         AS pt,
-            ST_X(ST_StartPoint(geom))   AS x,
-            ST_Y(ST_StartPoint(geom))   AS y
-        FROM seg_geoms
-        UNION ALL
-        SELECT
-            id,
-            2                           AS pt_pos,   -- 2 = end
-            ST_EndPoint(geom)           AS pt,
-            ST_X(ST_EndPoint(geom))     AS x,
-            ST_Y(ST_EndPoint(geom))     AS y
-        FROM seg_geoms;
-    """)
+def _build_dangle_table(con, table_name: str, include_coords: bool = True) -> int:
+    """
+    Create a table of dangling endpoints (first or last node of exactly one way).
+    Returns the count of dangling nodes.
+    """
+    coord_cols = ", n.lat, n.lon" if include_coords else ""
+    coord_join = "JOIN node_ids n ON e.node_id = n.node_id" if include_coords else ""
 
-    ep_count = con.execute("SELECT COUNT(*) FROM _endpoints").fetchone()[0]
-    logger.info("   Endpoints extracted: %s", f"{ep_count:,}")
-
-    # ── 2. Find near-miss pairs ───────────────────────────────────────────────
     con.execute(f"""
-        CREATE OR REPLACE TABLE _snap_pairs AS
-        SELECT
-            a.id        AS id_a,
-            a.pt_pos    AS pos_a,
-            b.id        AS id_b,
-            b.pt_pos    AS pos_b,
-            (a.x + b.x) / 2.0  AS snap_x,
-            (a.y + b.y) / 2.0  AS snap_y
-        FROM _endpoints a
-        JOIN _endpoints b
-            ON  a.id    < b.id                          -- avoid self-pairs and duplicates
-            AND ABS(a.x - b.x) < {SNAP_TOLERANCE}       -- cheap rectangular pre-filter
-            AND ABS(a.y - b.y) < {SNAP_TOLERANCE}
-            AND ST_Distance(a.pt, b.pt) < {SNAP_TOLERANCE}   -- precise distance check
-            AND ST_Distance(a.pt, b.pt) > 0;            -- exclude already-coincident points
-    """)
-
-    snap_count = con.execute("SELECT COUNT(*) FROM _snap_pairs").fetchone()[0]
-    logger.info("   Near-miss pairs found: %s", f"{snap_count:,}")
-
-    if snap_count == 0:
-        logger.info("   No boundary gaps detected — skipping snap  [%s]", _elapsed(t))
-        con.execute("DROP TABLE IF EXISTS _endpoints;")
-        con.execute("DROP TABLE IF EXISTS _snap_pairs;")
-        return
-
-    # ── 3 & 4. Compute snapped coordinates and update seg_geoms ──────────────
-    #
-    # Build two lookup tables: one for start-point snaps, one for end-point snaps.
-    # A segment may appear in both (if both its endpoints need snapping).
-    # We chain the two ST_SetPoint calls in a single CASE expression.
-    #
-    # NOTE: If a segment appears multiple times in _snap_pairs (its endpoint is
-    # near-miss to several others), we take the FIRST snap encountered.
-    # This is safe because: (a) gaps are tiny and all midpoints converge to
-    # essentially the same coordinate, and (b) the subsequent ST_Node pass will
-    # merge any remaining sub-tolerance differences.
-    con.execute(f"""
-        CREATE OR REPLACE TABLE _snap_start AS
-        SELECT id, snap_x, snap_y
-        FROM (
-            SELECT id_a AS id, snap_x, snap_y FROM _snap_pairs WHERE pos_a = 1
-            UNION ALL
-            SELECT id_b AS id, snap_x, snap_y FROM _snap_pairs WHERE pos_b = 1
+        CREATE OR REPLACE TABLE {table_name} AS
+        WITH eps AS (
+            SELECT way_id, node_id, seq,
+                MIN(seq) OVER (PARTITION BY way_id) AS min_seq,
+                MAX(seq) OVER (PARTITION BY way_id) AS max_seq
+            FROM way_nodes
+        ),
+        ep_count AS (
+            SELECT node_id, COUNT(*) AS n
+            FROM eps
+            WHERE seq = min_seq OR seq = max_seq
+            GROUP BY node_id
         )
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY snap_x) = 1;
+        SELECT e.way_id, e.node_id
+               {coord_cols}
+        FROM eps e
+        JOIN ep_count ec ON e.node_id = ec.node_id
+        {coord_join}
+        WHERE ec.n = 1
+          AND (e.seq = e.min_seq OR e.seq = e.max_seq);
     """)
+    return con.execute(f"SELECT COUNT(DISTINCT node_id) FROM {table_name}").fetchone()[0]
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER — union-find label propagation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _union_find(con, pairs_table: str, max_iter: int = 30) -> int:
+    """
+    Iterative label propagation on _snap_pairs → _labels.
+    Returns the number of nodes that will be merged.
+    """
     con.execute(f"""
-        CREATE OR REPLACE TABLE _snap_end AS
-        SELECT id, snap_x, snap_y
+        CREATE OR REPLACE TABLE _labels AS
+        SELECT node_id, node_id AS label
         FROM (
-            SELECT id_a AS id, snap_x, snap_y FROM _snap_pairs WHERE pos_a = 2
-            UNION ALL
-            SELECT id_b AS id, snap_x, snap_y FROM _snap_pairs WHERE pos_b = 2
-        )
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY id ORDER BY snap_x) = 1;
-    """)
-
-    # Apply snaps in a single pass over seg_geoms.
-    # The CASE chain first applies the start-point snap (if any), then feeds
-    # the result into the end-point snap (if any), avoiding two full table scans.
-    con.execute("""
-        CREATE OR REPLACE TABLE seg_geoms AS
-        SELECT
-            g.id,
-            CASE
-                -- Both start AND end need snapping
-                WHEN ss.snap_x IS NOT NULL AND se.snap_x IS NOT NULL
-                THEN ST_SetPoint(
-                        ST_SetPoint(g.geom, 0, ST_Point(ss.snap_x, ss.snap_y)),
-                        -1, ST_Point(se.snap_x, se.snap_y))
-                -- Only start needs snapping
-                WHEN ss.snap_x IS NOT NULL
-                THEN ST_SetPoint(g.geom, 0, ST_Point(ss.snap_x, ss.snap_y))
-                -- Only end needs snapping
-                WHEN se.snap_x IS NOT NULL
-                THEN ST_SetPoint(g.geom, -1, ST_Point(se.snap_x, se.snap_y))
-                -- No snap needed — pass through unchanged
-                ELSE g.geom
-            END AS geom
-        FROM seg_geoms g
-        LEFT JOIN _snap_start ss ON g.id = ss.id
-        LEFT JOIN _snap_end   se ON g.id = se.id;
-    """)
-
-    # Count how many segments were actually modified
-    snapped_segs = con.execute("""
-        SELECT COUNT(DISTINCT id) FROM (
-            SELECT id_a AS id FROM _snap_pairs
+            SELECT node_a AS node_id FROM {pairs_table}
             UNION
-            SELECT id_b AS id FROM _snap_pairs
-        )
-    """).fetchone()[0]
-    logger.info("   Segments modified by snap: %s", f"{snapped_segs:,}")
-
-    # Cleanup temporaries
-    con.execute("DROP TABLE IF EXISTS _endpoints;")
-    con.execute("DROP TABLE IF EXISTS _snap_pairs;")
-    con.execute("DROP TABLE IF EXISTS _snap_start;")
-    con.execute("DROP TABLE IF EXISTS _snap_end;")
-    con.execute("CHECKPOINT;")
-    logger.info("   Endpoint snap complete  [%s]", _elapsed(t))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _node_tile()
-#
-# Node one tile: collect → ST_Node → dump → filter → identify parent.
-# Queries seg_geoms (id + geom ONLY — no text attributes).
-#
-# WHY seg_geoms and not segments?
-#   `segments` holds both geometry AND text attributes (name, highway, …).
-#   During noding we only need id + geom. If we query segments, DuckDB loads
-#   ALL columns for matching rows — including the large geometry blobs AND
-#   all text — into the buffer pool. For 1.15M rows that's ~6-8 GB just for
-#   the source table, leaving almost nothing for ST_Node scratch space.
-#
-#   seg_geoms contains ONLY (id BIGINT, geom GEOMETRY) — roughly half the
-#   size, and DuckDB can evict pages more aggressively because fewer columns
-#   are referenced per query.
-#
-# Returns: number of rows inserted into noded_segments
-# ─────────────────────────────────────────────────────────────────────────────
-def _node_tile(con, ex0, ey0, ex1, ey1, cx0, cy0, cx1, cy1, seg_counter):
-    """
-    Node one tile: collect → ST_Node → dump → filter → identify parent.
-
-    Queries seg_geoms (id + geom ONLY — no text attributes) to minimise
-    buffer pool pressure during the noding loop.
-
-    Post-node sliver filter: MIN_SEG_LEN_DEG (≈ 1 m) prevents hairline pieces
-    produced by floating-point snap from entering noded_segments.
-    """
-    con.execute("DROP TABLE IF EXISTS _tile_noded;")
-
-    # CTE "src": segments in the expanded tile (id + geom only, no attributes).
-    # CTE "collected": merge into one MULTILINESTRING for ST_Node.
-    # CTE "noded": ST_Node splits every line at every crossing.
-    # CTE "dumped": explode back to individual pieces.
-    #   ST_PointN(..., 2) = second vertex = interior point of the noded piece.
-    #   After ST_ReducePrecision this point lies exactly on the parent segment,
-    #   making ST_Contains a reliable and cheap parent-identification test.
-    # CTE "owned": core-tile filter — only keep pieces whose centroid is inside
-    #   this tile's core bounds, preventing duplicates at tile borders.bui
-    # Final SELECT: find parent ID via ST_Contains (no geometry allocation).
-    con.execute(f"""
-        CREATE TEMP TABLE _tile_noded AS
-        WITH src AS (
-            -- Query geometry-only table: minimal columns → minimal buffer pool use
-            SELECT id, geom
-            FROM seg_geoms
-            WHERE ST_Intersects(geom, ST_MakeEnvelope({ex0},{ey0},{ex1},{ey1}))
-        ),
-        collected AS (
-            -- Merge all geometries into one MULTILINESTRING for ST_Node
-            SELECT ST_Collect(list(geom)) AS collected_geom FROM src
-        ),
-        noded AS (
-            -- ST_Node splits every line at every crossing (GEOS planar noding)
-            SELECT ST_Node(collected_geom) AS noded_geom
-            FROM collected
-            WHERE collected_geom IS NOT NULL
-        ),
-        dumped AS (
-            -- Explode noded MULTILINESTRING → individual pieces.
-            -- WKB round-trip strips EPSG annotation → plain GEOMETRY.
-            -- ST_PointN(...,2) = second vertex = guaranteed interior point after snap.
-            SELECT
-                ST_GeomFromWKB(ST_AsWKB((d.dump_struct).geom))  AS geom,
-                ST_X(ST_Centroid((d.dump_struct).geom))         AS cx,
-                ST_Y(ST_Centroid((d.dump_struct).geom))         AS cy,
-                -- Second vertex: interior point for cheap parent identification
-                ST_PointN((d.dump_struct).geom, 2)              AS interior_pt
-            FROM noded,
-                 UNNEST(ST_Dump(noded_geom)) AS d(dump_struct)
-            WHERE NOT ST_IsEmpty((d.dump_struct).geom)
-              AND ST_NPoints((d.dump_struct).geom) >= 2
-              AND ST_Length((d.dump_struct).geom) > {MIN_SEG_LEN_DEG}    -- drop zero-length slivers (old value =1e-6)
-        ),
-        owned AS (
-            -- Core-tile dedup: only keep pieces whose centroid is inside this tile.
-            -- Prevents the same piece appearing in two adjacent tiles' outputs.
-            SELECT geom, interior_pt FROM dumped
-            WHERE cx >= {cx0} AND cx < {cx1}
-              AND cy >= {cy0} AND cy < {cy1}
-        )
-        -- Find parent source ID via ST_Contains (coordinate test, no geometry alloc)
-        SELECT
-            o.geom,
-            s.id AS src_id
-        FROM owned o
-        LEFT JOIN LATERAL (
-            SELECT src.id
-            FROM src
-            WHERE ST_Contains(src.geom, o.interior_pt)
-            LIMIT 1
-        ) s ON true;
+            SELECT node_b            FROM {pairs_table}
+        ) t;
     """)
 
-    # Bulk-insert with globally unique IDs.
-    # ROW_NUMBER() OVER () → 1,2,3,… within this tile.
-    # + seg_counter offsets into the global ID space.
-    n = con.execute("SELECT COUNT(*) FROM _tile_noded").fetchone()[0]
-    if n > 0:
+    for i in range(max_iter):
         con.execute(f"""
-            INSERT INTO noded_segments (seg_id, geom, src_id)
-            SELECT
-                {seg_counter} + ROW_NUMBER() OVER () AS seg_id, geom, src_id
-            FROM _tile_noded;
+            CREATE OR REPLACE TABLE _labels_new AS
+            SELECT l.node_id,
+                MIN(COALESCE(la.label, lb.label, l.label)) AS label
+            FROM _labels l
+            LEFT JOIN {pairs_table} p ON l.node_id = p.node_a OR l.node_id = p.node_b
+            LEFT JOIN _labels la      ON p.node_a = la.node_id
+            LEFT JOIN _labels lb      ON p.node_b = lb.node_id
+            GROUP BY l.node_id;
         """)
+        changed = con.execute("""
+            SELECT COUNT(*) FROM _labels l
+            JOIN _labels_new ln ON l.node_id = ln.node_id
+            WHERE l.label != ln.label
+        """).fetchone()[0]
+        con.execute("DROP TABLE IF EXISTS _labels;")
+        con.execute("ALTER TABLE _labels_new RENAME TO _labels;")
+        logger.debug("    union-find iter %d: %d changes", i + 1, changed)
+        if changed == 0:
+            logger.info("    union-find converged in %d iterations", i + 1)
+            break
+    else:
+        logger.warning("    union-find did not converge in %d iterations", max_iter)
 
-    con.execute("DROP TABLE IF EXISTS _tile_noded;")
-    return n
+    return con.execute("SELECT COUNT(*) FROM _labels").fetchone()[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _node_tile_subdivide()
+# HELPER — apply label remapping to way_nodes and node_ids
 # ─────────────────────────────────────────────────────────────────────────────
-def _node_tile_subdivide(con, cx0, cy0, cx1, cy1, seg_counter, depth=1):
+
+def _apply_labels(con) -> tuple[int, int]:
     """
-    Recursively split a tile that OOM'd into n_sub×n_sub sub-tiles.
-    depth=1 → 4×4 = 16 sub-tiles  (tile_size / 4)
-    depth=2 → 4×4×4 = 64 sub-sub-tiles  (tile_size / 16)
-    depth=3 → gives up and skips (extremely pathological tile)
+    Remap node_ids in way_nodes and node_ids tables using _labels.
+    Returns (old_node_count, new_node_count).
     """
-    if depth > 2:
-        logger.warning("Skipping pathologically dense tile at depth %d", depth)
-        return seg_counter
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_remapped AS
+        SELECT wn.way_id, wn.seq,
+            COALESCE(l.label, wn.node_id) AS node_id
+        FROM way_nodes wn
+        LEFT JOIN _labels l ON wn.node_id = l.node_id;
+    """)
+    con.execute("DROP TABLE IF EXISTS way_nodes;")
+    con.execute("ALTER TABLE _wn_remapped RENAME TO way_nodes;")
 
-    n_sub    = 4
-    sub_size = (cx1 - cx0) / n_sub
-    sub_ov   = sub_size * OVERLAP_FACTOR
+    con.execute("""
+        CREATE OR REPLACE TABLE _ni_remapped AS
+        SELECT COALESCE(l.label, n.node_id) AS node_id, n.lat, n.lon
+        FROM node_ids n
+        LEFT JOIN _labels l ON n.node_id = l.node_id
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(l.label, n.node_id)
+            ORDER BY n.node_id
+        ) = 1;
+    """)
+    old_cnt = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    con.execute("DROP TABLE IF EXISTS node_ids;")
+    con.execute("ALTER TABLE _ni_remapped RENAME TO node_ids;")
+    new_cnt = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    return old_cnt, new_cnt
 
-    for si in range(n_sub):
-        for sj in range(n_sub):
-            scx0 = cx0 + si * sub_size;  scx1 = scx0 + sub_size
-            scy0 = cy0 + sj * sub_size;  scy1 = scy0 + sub_size
-            sex0 = scx0 - sub_ov;  sex1 = scx1 + sub_ov
-            sey0 = scy0 - sub_ov;  sey1 = scy1 + sub_ov
-            try:
-                n = _node_tile(con, sex0, sey0, sex1, sey1,
-                               scx0, scy0, scx1, scy1, seg_counter)
-                seg_counter += n
-            except Exception as e2:
-                if "OutOfMemory" in type(e2).__name__ or "out of memory" in str(e2).lower():
-                    con.execute("CHECKPOINT;")
-                    logger.warning("OOM sub-tile depth=%d → split again …", depth)
-                    seg_counter = _node_tile_subdivide(
-                        con, scx0, scy0, scx1, scy1, seg_counter, depth + 1)
-                else:
-                    raise
-    return seg_counter
 
 # ─────────────────────────────────────────────────────────────────────────────
-# _tiled_node()
-#
-# Divides the bounding box into tiles and calls _node_tile() on each.
-#
-# MEMORY STRATEGY:
-#   1. seg_geoms (geometry only) is checkpointed to disk before the loop.
-#      DuckDB can then evict its pages and only reload one tile's worth at a time.
-#   2. CHECKPOINT every CHECKPOINT_EVERY tiles flushes noded_segments inserts
-#      from the buffer pool to disk, keeping peak RAM flat.
-#   3. OOM → checkpoint + split into 4×4=16 sub-tiles + retry.
-#      If still OOM → split into 4×4×4=64 sub-sub-tiles.
+# HELPER — remove consecutive duplicate node refs and degenerate ways
 # ─────────────────────────────────────────────────────────────────────────────
-def _tiled_node(con: duckdb.DuckDBPyConnection, tile_size: float) -> None:
+
+def _clean_way_nodes(con, caller: str = "") -> tuple[int, int]:
     """
-    Divide the bounding box into tiles and call _node_tile() on each.
+    1. Remove consecutive duplicate node refs (rounding collapse artefacts).
+    2. Drop degenerate ways (< 2 nodes, or closed loop with only 2 refs).
+    Returns (dup_refs_removed, degen_ways_dropped).
+    """
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_clean AS
+        SELECT way_id, seq, node_id FROM (
+            SELECT way_id, seq, node_id,
+                LAG(node_id) OVER (PARTITION BY way_id ORDER BY seq) AS prev_id
+            FROM way_nodes
+        ) t WHERE prev_id IS NULL OR node_id != prev_id;
+    """)
+    dup_refs = (con.execute("SELECT COUNT(*) FROM way_nodes").fetchone()[0]
+                - con.execute("SELECT COUNT(*) FROM _wn_clean").fetchone()[0])
 
-    Memory strategy:
-      1. seg_geoms is checkpointed to disk before the loop; DuckDB evicts its
-         pages and reloads only the current tile's worth on each iteration.
-      2. CHECKPOINT every CHECKPOINT_EVERY tiles flushes noded_segments inserts
-         from the buffer pool to disk, keeping peak RAM flat.
-      3. OOM → checkpoint + subdivide into 4×4 sub-tiles + retry.
+    con.execute("""
+        CREATE OR REPLACE TABLE _degen AS
+        SELECT way_id FROM (
+            SELECT way_id,
+                COUNT(*)                    AS n,
+                COUNT(DISTINCT node_id)     AS nd,
+                FIRST(node_id ORDER BY seq) AS fn,
+                LAST(node_id  ORDER BY seq) AS ln
+            FROM _wn_clean GROUP BY way_id
+        ) s WHERE n < 2 OR nd < 2 OR (fn = ln AND n = 2);
+    """)
+    n_degen = con.execute("SELECT COUNT(*) FROM _degen").fetchone()[0]
+    if n_degen > 0:
+        con.execute("DELETE FROM _wn_clean WHERE way_id IN (SELECT way_id FROM _degen);")
+        con.execute("DELETE FROM edges     WHERE way_id IN (SELECT way_id FROM _degen);")
 
-    Overlap = 100% (OVERLAP_FACTOR=1): every road within one full tile-width of
-    a border is included in the neighbour's noding pass, guaranteeing that
-    intersecting lines share a common node regardless of which corner they cross.
+    con.execute("DROP TABLE IF EXISTS way_nodes;")
+    con.execute("ALTER TABLE _wn_clean RENAME TO way_nodes;")
+    con.execute("DROP TABLE IF EXISTS _degen;")
+    return dup_refs, n_degen
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 7a — NODE-TO-NODE SNAPPING  (two passes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _snap_node_to_node(con):
+    """
+    Pass 1: snap ALL way endpoints within SNAP_TOL_TIGHT_DEG.
+            Fixes float-drift gaps that survive rounding.
+    Pass 2: snap remaining DANGLING endpoints within SNAP_TOL_WIDE_DEG.
+            Fixes roundabout spokes and region-split offsets.
     """
     t0 = time.time()
 
-    logger.info("   Calculating bounding box …")
-    bbox = con.execute("""
-        SELECT
-            MIN(ST_XMin(geom)) AS xmin, MIN(ST_YMin(geom)) AS ymin,
-            MAX(ST_XMax(geom)) AS xmax, MAX(ST_YMax(geom)) AS ymax
-        FROM seg_geoms
-    """).fetchone()
-    xmin, ymin, xmax, ymax = [float(x) for x in bbox]
+    def _one_pass(tol: float, dangling_only: bool, label: str):
+        if dangling_only:
+            n_cands = _build_dangle_table(con, "_cands")
+        else:
+            con.execute("""
+                CREATE OR REPLACE TABLE _cands AS
+                WITH eps AS (
+                    SELECT way_id, node_id, seq,
+                        MIN(seq) OVER (PARTITION BY way_id) AS min_seq,
+                        MAX(seq) OVER (PARTITION BY way_id) AS max_seq
+                    FROM way_nodes
+                )
+                SELECT DISTINCT e.node_id, n.lat, n.lon
+                FROM eps e
+                JOIN node_ids n ON e.node_id = n.node_id
+                WHERE e.seq = e.min_seq OR e.seq = e.max_seq;
+            """)
+            n_cands = con.execute("SELECT COUNT(*) FROM _cands").fetchone()[0]
 
-    cols = math.ceil((xmax - xmin) / tile_size)
-    rows = math.ceil((ymax - ymin) / tile_size)
-    overlap = tile_size * OVERLAP_FACTOR  # old value 0.60 reach 60% into neighbours for border noding
+        logger.info("  [%s] candidates: %s  tol=%.5f°", label, f"{n_cands:,}", tol)
+        if n_cands == 0:
+            con.execute("DROP TABLE IF EXISTS _cands;")
+            return
 
-    logger.info("Grid: %d×%d = %s tiles  (tile_size=%.4f°, overlap=%.4f°)", cols, rows, f"{cols * rows:,}", tile_size, overlap)
+        con.execute(f"""
+            CREATE OR REPLACE TABLE _pairs AS
+            SELECT a.node_id AS node_a, b.node_id AS node_b
+            FROM _cands a JOIN _cands b
+              ON a.node_id < b.node_id
+             AND b.lon BETWEEN a.lon - {tol} AND a.lon + {tol}
+             AND b.lat BETWEEN a.lat - {tol} AND a.lat + {tol}
+             AND SQRT(POWER(a.lon-b.lon,2)+POWER(a.lat-b.lat,2)) <= {tol};
+        """)
+        n_pairs = con.execute("SELECT COUNT(*) FROM _pairs").fetchone()[0]
+        logger.info("  [%s] pairs: %s", label, f"{n_pairs:,}")
+        con.execute("DROP TABLE IF EXISTS _cands;")
 
-    # One SQL pass → occupied (col, row) set. Avoids COUNT per tile (~700k queries).
-    logger.info("   Precomputing non-empty tiles …")
-    occupied_set = set(con.execute(f"""
-        SELECT DISTINCT
-            LEAST(FLOOR((ST_X(ST_Centroid(geom)) - {xmin}) / {tile_size})::INTEGER,
-                  {cols-1}) AS tc,
-            LEAST(FLOOR((ST_Y(ST_Centroid(geom)) - {ymin}) / {tile_size})::INTEGER,
-                  {rows-1}) AS tr
-        FROM seg_geoms
-    """).fetchall())
+        if n_pairs == 0:
+            con.execute("DROP TABLE IF EXISTS _pairs;")
+            return
 
-    # Build a set of (col, row) tuples for O(1) lookup
-    n_occupied = len(occupied_set)
-    logger.info("Non-empty tiles: %s / %s", f"{n_occupied:,}", f"{cols * rows:,}")
+        n_in = _union_find(con, "_pairs")
+        n_clusters = con.execute("SELECT COUNT(DISTINCT label) FROM _labels").fetchone()[0]
+        logger.info("  [%s] merging %s nodes → %s clusters", label,
+                    f"{n_in:,}", f"{n_clusters:,}")
 
-    con.execute("DROP TABLE IF EXISTS noded_segments;")
-    con.execute("""
-        CREATE TABLE noded_segments (
-            seg_id  BIGINT,
-            geom    GEOMETRY,
-            src_id  BIGINT      -- integer FK → seg_attrs.id, joined cheaply in Step 5
-        );
+        old_cnt, new_cnt = _apply_labels(con)
+        logger.info("  [%s] nodes: %s → %s (merged %s)",
+                    label, f"{old_cnt:,}", f"{new_cnt:,}", f"{old_cnt-new_cnt:,}")
+        con.execute("DROP TABLE IF EXISTS _pairs; DROP TABLE IF EXISTS _labels;")
+
+    _one_pass(SNAP_TOL_TIGHT_DEG, dangling_only=False, label="pass1-all-ep")
+    _one_pass(SNAP_TOL_WIDE_DEG,  dangling_only=True,  label="pass2-dangle")
+
+    dup_refs, n_degen = _clean_way_nodes(con, "node-to-node snap")
+    if dup_refs:
+        logger.warning("  Removed %s duplicate node refs", f"{dup_refs:,}")
+    if n_degen:
+        logger.warning("  Dropped %s degenerate ways", f"{n_degen:,}")
+
+    con.execute("CHECKPOINT;")
+    logger.info("  Node-to-node snap complete  [%s]", _elapsed(t0))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 7b — POINT-TO-EDGE SNAPPING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _snap_point_to_edge(con):
+    """
+    Two-step endpoint connectivity fix applied to every remaining dangling
+    endpoint (first/last node of exactly one way) after node-to-node snapping.
+
+    STEP A — endpoint-to-endpoint (tight, ~1 m):
+      Snap P to the nearest endpoint of ANY other way within
+      ENDPOINT_SNAP_TOL_DEG.  This is a final tight-tolerance cleanup pass
+      that catches cases the wider node-to-node passes missed.
+
+    STEP B — endpoint-to-edge (projection):
+      For each dangling endpoint P that STILL has no partner after Step A:
+        1. Find every segment (consecutive node pair) of every other way
+           whose bounding box overlaps a box of size EDGE_SNAP_TOL_DEG
+           centred on P.  The box covers BOTH endpoints of the segment,
+           so no segment that passes through the area is missed.
+        2. Project P perpendicularly onto each candidate segment.
+           Keep only projections that land strictly inside the segment
+           (t ∈ (0.001, 0.999)) — endpoints are already handled by Step A.
+        3. Pick the single nearest valid projection.
+        4. Insert a new node at the rounded projection point.
+        5. Split the target segment: [..., A, B, ...] → [..., A, NEW, B, ...]
+        6. Remap P → NEW so the two ways share the node.
+
+    Fixes: T-intersections, roundabout spokes, roads that end beside (not at)
+    another road's node.
+    """
+    t0 = time.time()
+    r  = ROUNDING_DIGITS
+
+    # ── Collect all dangling endpoints once ───────────────────────────────────
+    n_dangles = _build_dangle_table(con, "_dangle_all")
+    logger.info("  Dangling endpoints (before edge snap): %s", f"{n_dangles:,}")
+    if n_dangles == 0:
+        con.execute("DROP TABLE IF EXISTS _dangle_all;")
+        logger.info("  No dangling endpoints — skipped  [%s]", _elapsed(t0))
+        return
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP A — tight endpoint-to-endpoint snap (~1 m)
+    # ═══════════════════════════════════════════════════════════════════════════
+    tol_ep = ENDPOINT_SNAP_TOL_DEG
+    logger.info("  [Step A] endpoint→endpoint  tol=%.6f° (~%.1f m)",
+                tol_ep, tol_ep * 111_111)
+
+    # Candidate pool: ALL way endpoints (not just dangles) so a dangle can
+    # snap to a well-connected node of another road.
+    con.execute(f"""
+        CREATE OR REPLACE TABLE _all_ep AS
+        WITH eps AS (
+            SELECT way_id, node_id, seq,
+                MIN(seq) OVER (PARTITION BY way_id) AS min_seq,
+                MAX(seq) OVER (PARTITION BY way_id) AS max_seq
+            FROM way_nodes
+        )
+        SELECT DISTINCT e.node_id, n.lat, n.lon
+        FROM eps e
+        JOIN node_ids n ON e.node_id = n.node_id
+        WHERE e.seq = e.min_seq OR e.seq = e.max_seq;
     """)
 
-    seg_counter = 0
-    processed   = 0
-    tiles_since_checkpoint = 0
+    con.execute(f"""
+        CREATE OR REPLACE TABLE _ep_pairs AS
+        SELECT d.node_id AS node_a, ep.node_id AS node_b
+        FROM _dangle_all d
+        JOIN _all_ep ep
+          ON ep.node_id != d.node_id
+         AND ep.lon BETWEEN d.lon - {tol_ep} AND d.lon + {tol_ep}
+         AND ep.lat BETWEEN d.lat - {tol_ep} AND d.lat + {tol_ep}
+         AND SQRT(POWER(d.lon - ep.lon, 2) + POWER(d.lat - ep.lat, 2)) <= {tol_ep}
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY d.node_id
+            ORDER BY SQRT(POWER(d.lon - ep.lon, 2) + POWER(d.lat - ep.lat, 2))
+        ) = 1;
+    """)
+    n_ep_pairs = con.execute("SELECT COUNT(*) FROM _ep_pairs").fetchone()[0]
+    logger.info("  [Step A] pairs found: %s", f"{n_ep_pairs:,}")
 
-    pbar = tqdm(
-        total=n_occupied,
-        desc="  Noding tiles ",
-        unit="tile",
-        dynamic_ncols=True,
-        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}",
-    )
-    pbar.set_postfix(segs=0)
+    if n_ep_pairs > 0:
+        n_in = _union_find(con, "_ep_pairs")
+        n_clusters = con.execute("SELECT COUNT(DISTINCT label) FROM _labels").fetchone()[0]
+        logger.info("  [Step A] merging %s nodes → %s clusters", f"{n_in:,}", f"{n_clusters:,}")
+        old_cnt, new_cnt = _apply_labels(con)
+        logger.info("  [Step A] nodes: %s → %s (merged %s)",
+                    f"{old_cnt:,}", f"{new_cnt:,}", f"{old_cnt - new_cnt:,}")
+        con.execute("DROP TABLE IF EXISTS _labels;")
 
-    for r in range(rows):
-        for c in range(cols):
+    con.execute("DROP TABLE IF EXISTS _ep_pairs; DROP TABLE IF EXISTS _all_ep;")
 
-            # O(1) skip — no DuckDB call for empty tiles
-            if (c, r) not in occupied_set:
-                continue
+    # Re-run dedup/degen cleanup after Step A merges
+    dup_refs, n_degen = _clean_way_nodes(con, "step-A")
+    if dup_refs:
+        logger.warning("  [Step A] removed %s duplicate node refs", f"{dup_refs:,}")
+    if n_degen:
+        logger.warning("  [Step A] dropped %s degenerate ways", f"{n_degen:,}")
 
-            # Core tile bounds
-            cx0 = xmin + c * tile_size;  cx1 = cx0 + tile_size
-            cy0 = ymin + r * tile_size;  cy1 = cy0 + tile_size
-            # Expanded bounds (overlap into neighbours)
-            ex0 = cx0 - overlap;  ex1 = cx1 + overlap
-            ey0 = cy0 - overlap;  ey1 = cy1 + overlap
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STEP B — endpoint-to-edge projection snap
+    # ═══════════════════════════════════════════════════════════════════════════
+    tol_edge = EDGE_SNAP_TOL_DEG
+    logger.info("  [Step B] endpoint→edge  tol=%.5f° (~%.0f m)",
+                tol_edge, tol_edge * 111_111)
 
-            try:
-                n = _node_tile(con, ex0, ey0, ex1, ey1,
-                               cx0, cy0, cx1, cy1, seg_counter)
-                seg_counter += n
-                logger.debug("Tile (%d,%d): +%d segs, total=%d", c, r, n, seg_counter)
+    # Refresh dangling table — some may have been resolved by Step A
+    con.execute("DROP TABLE IF EXISTS _dangle_all;")
+    n_dangles = _build_dangle_table(con, "_dangle_all")
+    logger.info("  [Step B] remaining dangling endpoints: %s", f"{n_dangles:,}")
 
-            except Exception as e:
-                if "OutOfMemory" in type(e).__name__ or "out of memory" in str(e).lower():
-                    # Split into 4 sub-tiles and retry
-                    # Checkpoint before retry — releases buffer pool pressure
-                    con.execute("CHECKPOINT;")
-                    tiles_since_checkpoint = 0
-                    logger.warning("OOM at tile (%d,%d) → checkpoint + split 4×4 …", c, r)
-                    seg_counter = _node_tile_subdivide(
-                        con, cx0, cy0, cx1, cy1, seg_counter, depth=1)
-                else:
-                    raise
+    if n_dangles == 0:
+        con.execute("DROP TABLE IF EXISTS _dangle_all;")
+        logger.info("  [Step B] all endpoints connected after Step A  [%s]", _elapsed(t0))
+        return
 
-            processed += 1
-            tiles_since_checkpoint += 1
+    # ── B1. Build segment index ───────────────────────────────────────────────
+    # Each row = one consecutive node pair from way_nodes.
+    # We store BOTH endpoint coords so the bounding box join below can check
+    # whether the segment passes through the search area from either direction.
+    logger.info("  [Step B] building segment index ...")
+    con.execute("""
+        CREATE OR REPLACE TABLE _segs AS
+        SELECT
+            wn.way_id,
+            wn.seq      AS seq_a,
+            wn.node_id  AS node_a,
+            na.lon      AS a_x,
+            na.lat      AS a_y,
+            wn2.node_id AS node_b,
+            nb.lon      AS b_x,
+            nb.lat      AS b_y,
+            -- bounding box of the segment for fast range filter
+            LEAST(na.lon, nb.lon)    AS seg_min_x,
+            GREATEST(na.lon, nb.lon) AS seg_max_x,
+            LEAST(na.lat, nb.lat)    AS seg_min_y,
+            GREATEST(na.lat, nb.lat) AS seg_max_y
+        FROM way_nodes wn
+        JOIN way_nodes wn2
+          ON wn.way_id = wn2.way_id AND wn2.seq = wn.seq + 1
+        JOIN node_ids na ON wn.node_id  = na.node_id
+        JOIN node_ids nb ON wn2.node_id = nb.node_id
+        WHERE (nb.lon - na.lon)*(nb.lon - na.lon)
+            + (nb.lat - na.lat)*(nb.lat - na.lat) > 1e-18;
+    """)
+    logger.info("  [Step B] segments indexed: %s",
+                f"{con.execute('SELECT COUNT(*) FROM _segs').fetchone()[0]:,}")
 
-            # Periodic CHECKPOINT: flush noded_segments buffer pool → disk.
-            # This keeps RAM usage flat regardless of how many segments accumulate.
-            if tiles_since_checkpoint >= CHECKPOINT_EVERY:
-                con.execute("CHECKPOINT;")
-                tiles_since_checkpoint = 0
-                logger.debug("CHECKPOINT at tile %d, segs=%d", processed, seg_counter)
+    # ── B2. Project each dangling point onto candidate segments ───────────────
+    # Bounding-box filter: the segment's own bbox must overlap the search box
+    # around P.  This correctly finds segments that PASS THROUGH the area even
+    # if their start node is outside it.
+    #
+    # Parametric projection:
+    #   t  = dot(P-A, B-A) / |B-A|²          (scalar, 0..1 = inside segment)
+    #   Q  = A + t*(B-A)                      (foot of perpendicular)
+    #   d  = |P - Q|                          (perpendicular distance)
+    logger.info("  [Step B] computing projections ...")
+    con.execute(f"""
+        CREATE OR REPLACE TABLE _proj AS
+        WITH candidates AS (
+            SELECT
+                d.node_id  AS dangle_node,
+                d.way_id   AS dangle_way,
+                s.way_id   AS target_way,
+                s.seq_a,
+                s.node_a,
+                s.node_b,
+                s.a_x, s.a_y,
+                s.b_x, s.b_y,
+                d.lon      AS p_x,
+                d.lat      AS p_y
+            FROM _dangle_all d
+            JOIN _segs s
+              ON s.way_id   != d.way_id
+             -- segment bbox overlaps search box around P
+             AND s.seg_max_x >= d.lon - {tol_edge}
+             AND s.seg_min_x <= d.lon + {tol_edge}
+             AND s.seg_max_y >= d.lat - {tol_edge}
+             AND s.seg_min_y <= d.lat + {tol_edge}
+        ),
+        projected AS (
+            SELECT *,
+                -- dot(P-A, B-A)
+                (p_x - a_x)*(b_x - a_x) + (p_y - a_y)*(b_y - a_y) AS dot_num,
+                -- |B-A|²
+                (b_x - a_x)*(b_x - a_x) + (b_y - a_y)*(b_y - a_y) AS len2
+            FROM candidates
+        ),
+        with_t AS (
+            SELECT *,
+                dot_num / len2 AS t
+            FROM projected
+            WHERE len2 > 1e-18
+        ),
+        with_foot AS (
+            SELECT *,
+                a_x + t*(b_x - a_x) AS q_x,
+                a_y + t*(b_y - a_y) AS q_y
+            FROM with_t
+            -- foot must land strictly inside segment (not at endpoints)
+            WHERE t BETWEEN 0.001 AND 0.999
+        )
+        SELECT
+            dangle_node,
+            dangle_way,
+            target_way,
+            seq_a,
+            node_a,
+            node_b,
+            ROUND(q_x, {r})::DOUBLE AS proj_lon,
+            ROUND(q_y, {r})::DOUBLE AS proj_lat,
+            SQRT(POWER(p_x - q_x, 2) + POWER(p_y - q_y, 2)) AS dist
+        FROM with_foot
+        WHERE SQRT(POWER(p_x - q_x, 2) + POWER(p_y - q_y, 2)) <= {tol_edge};
+    """)
 
-            # Use set_postfix (not postfix dict key) — correct tqdm API
-            pbar.set_postfix(segs=f"{seg_counter:,}")
-            pbar.update(1)
+    # ── B3. Best projection per dangling endpoint ─────────────────────────────
+    con.execute("""
+        CREATE OR REPLACE TABLE _best AS
+        SELECT *
+        FROM _proj
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY dangle_node
+            ORDER BY dist
+        ) = 1;
+    """)
+    n_snaps = con.execute("SELECT COUNT(*) FROM _best").fetchone()[0]
+    logger.info("  [Step B] projection matches: %s", f"{n_snaps:,}")
 
-            # Log to file every 500 tiles (doesn't disturb the bar)
-            if processed % 500 == 0:
-                logger.info(
-                    "Noding: %d/%d tiles (%.0f%%)  segs=%s  [%s]",
-                    processed, n_occupied,
-                    processed / n_occupied * 100,
-                    f"{seg_counter:,}", _elapsed(t0),
-                )
+    for tbl in ("_proj", "_segs", "_dangle_all"):
+        con.execute(f"DROP TABLE IF EXISTS {tbl};")
 
-    pbar.close()
+    if n_snaps == 0:
+        con.execute("DROP TABLE IF EXISTS _best;")
+        logger.info("  [Step B] no projection matches  [%s]", _elapsed(t0))
+        return
+
+    # ── B4. Insert new nodes at projection coordinates ────────────────────────
+    min_id = con.execute("SELECT MIN(node_id) FROM node_ids").fetchone()[0]
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE _new_nodes AS
+        SELECT
+            ({min_id} - ROW_NUMBER() OVER (ORDER BY dangle_node)) AS new_node_id,
+            proj_lat  AS lat,
+            proj_lon  AS lon,
+            dangle_node,
+            target_way,
+            seq_a,
+            node_a,
+            node_b
+        FROM _best;
+    """)
+
+    # Only insert if no node already exists at these rounded coordinates.
+    con.execute("""
+        INSERT INTO node_ids (node_id, lat, lon)
+        SELECT nn.new_node_id, nn.lat, nn.lon
+        FROM _new_nodes nn
+        LEFT JOIN node_ids ex ON ex.lat = nn.lat AND ex.lon = nn.lon
+        WHERE ex.node_id IS NULL;
+    """)
+
+    # If the projection rounded to an already-existing node, reuse it.
+    con.execute("""
+        CREATE OR REPLACE TABLE _resolved AS
+        SELECT
+            nn.dangle_node,
+            nn.target_way,
+            nn.seq_a,
+            nn.node_a,
+            nn.node_b,
+            COALESCE(ex.node_id, nn.new_node_id) AS shared_node,
+            nn.lat,
+            nn.lon
+        FROM _new_nodes nn
+        LEFT JOIN node_ids ex
+          ON ex.lat = nn.lat AND ex.lon = nn.lon
+         AND ex.node_id != nn.new_node_id;
+    """)
+    con.execute("DROP TABLE IF EXISTS _new_nodes; DROP TABLE IF EXISTS _best;")
+
+    # ── B5. Split target segments ─────────────────────────────────────────────
+    logger.info("  [Step B] splitting %s segments ...", f"{n_snaps:,}")
+
+    con.execute("""
+        CREATE OR REPLACE TABLE _affected_ways AS
+        SELECT DISTINCT target_way AS way_id FROM _resolved;
+    """)
+
+    # Inject new node between seq_a and seq_a+1 using a fractional seq value.
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_expanded AS
+        -- Original nodes of affected ways
+        SELECT wn.way_id, wn.seq::DOUBLE AS seq_f, wn.node_id
+        FROM way_nodes wn
+        WHERE wn.way_id IN (SELECT way_id FROM _affected_ways)
+
+        UNION ALL
+
+        -- Injected projection nodes (land between A and B)
+        SELECT r.target_way, r.seq_a + 0.5, r.shared_node
+        FROM _resolved r;
+    """)
+
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_rebuilt AS
+        SELECT way_id,
+               ROW_NUMBER() OVER (PARTITION BY way_id ORDER BY seq_f) AS seq,
+               node_id
+        FROM _wn_expanded;
+    """)
+
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_new AS
+        SELECT way_id, seq, node_id
+        FROM way_nodes
+        WHERE way_id NOT IN (SELECT way_id FROM _affected_ways)
+
+        UNION ALL
+
+        SELECT way_id, seq, node_id FROM _wn_rebuilt;
+    """)
+    con.execute("DROP TABLE IF EXISTS way_nodes;")
+    con.execute("ALTER TABLE _wn_new RENAME TO way_nodes;")
+
+    # ── B6. Remap dangling endpoint → shared node ─────────────────────────────
+    logger.info("  [Step B] remapping dangling endpoints ...")
+    con.execute("""
+        CREATE OR REPLACE TABLE _wn_remapped AS
+        SELECT wn.way_id, wn.seq,
+               COALESCE(r.shared_node, wn.node_id) AS node_id
+        FROM way_nodes wn
+        LEFT JOIN _resolved r ON wn.node_id = r.dangle_node;
+    """)
+    con.execute("DROP TABLE IF EXISTS way_nodes;")
+    con.execute("ALTER TABLE _wn_remapped RENAME TO way_nodes;")
+
+    for tbl in ("_resolved", "_affected_ways", "_wn_expanded", "_wn_rebuilt"):
+        con.execute(f"DROP TABLE IF EXISTS {tbl};")
+
+    dup_refs, n_degen = _clean_way_nodes(con, "step-B")
+    if dup_refs:
+        logger.warning("  [Step B] removed %s duplicate node refs", f"{dup_refs:,}")
+    if n_degen:
+        logger.warning("  [Step B] dropped %s degenerate ways", f"{n_degen:,}")
+
     con.execute("CHECKPOINT;")
-    logger.info("Noding complete: %s segments  [%s]", f"{seg_counter:,}", _elapsed(t0))
+    n_nodes = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    n_ways  = con.execute("SELECT COUNT(DISTINCT way_id) FROM way_nodes").fetchone()[0]
+    logger.info("  Point-to-edge snap complete — nodes: %s  ways: %s  [%s]",
+                f"{n_nodes:,}", f"{n_ways:,}", _elapsed(t0))
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -775,6 +939,8 @@ def _write_osm_xml(con: duckdb.DuckDBPyConnection, path: str, node_count: int, w
                             }))
                         n_written += len(rows)
                         pbar.update(len(rows))
+                        if n_written % 2_000_000 == 0:
+                            logger.debug("%s nodes written", f"{n_written:,}")
                 gc.collect()
                 logger.info("Nodes done: %s  [%s]", f"{n_written:,}", _elapsed(t))
 
@@ -800,8 +966,7 @@ def _write_osm_xml(con: duckdb.DuckDBPyConnection, path: str, node_count: int, w
                     nonlocal n_skipped
                     if elem is None:
                         return
-                    nd_count = sum(1 for ch in elem if ch.tag == "nd")
-                    if nd_count < 2:
+                    if sum(1 for ch in elem if ch.tag == "nd") < 2:
                         n_skipped += 1
                         return
                     xf.write(elem)
@@ -838,24 +1003,26 @@ def _write_osm_xml(con: duckdb.DuckDBPyConnection, path: str, node_count: int, w
                                 ]:
                                     if v is not None and str(v).strip():
                                         etree.SubElement(way_elem, "tag", {"k": k, "v": str(v)})
+                                if n_ways % 1_000_000 == 0:
+                                    logger.debug("%s ways processed", f"{n_ways:,}")
                             etree.SubElement(way_elem, "nd", {"ref": str(node_id)})
 
                     flush_way(way_elem)
 
+                written = n_ways - n_skipped
                 if n_skipped:
-                    logger.warning(
-                        "Skipped %s ways with < 2 refs at write time", f"{n_skipped:,}"
-                    )
-                logger.info(
-                    "Ways done: %s written, %s skipped  [%s]",
-                    f"{n_ways - n_skipped:,}", f"{n_skipped:,}", _elapsed(t),
-                )
+                    pct = n_skipped / n_ways * 100 if n_ways else 0
+                    logger.warning("Ways written: %s  skipped (< 2 refs): %s (%.2f%%)  [%s]",
+                                   f"{written:,}", f"{n_skipped:,}", pct, _elapsed(t))
+                else:
+                    logger.info("Ways written: %s  skipped: 0  [%s]", f"{written:,}", _elapsed(t))
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # build_osm_topology() — main pipeline
 # ─────────────────────────────────────────────────────────────────────────────
-def build_osm_topology(input_file: str, output_osm: str, tile_size: float = 0.015, memory_gb: int = 8) -> None:
+def build_osm_topology(input_file: str, output_osm: str, memory_gb: int = 8) -> None:
     pipeline_t0    = time.time()
     original_input = input_file
     input_file = os.path.abspath(input_file)
@@ -878,15 +1045,21 @@ def build_osm_topology(input_file: str, output_osm: str, tile_size: float = 0.01
     db_name = os.path.splitext(os.path.basename(output_osm))[0] + ".duckdb"
     db_path = os.path.join("/tmp", db_name)
 
-    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    logger.info("━" * 60)
     logger.info("Input    → %s", input_file)
     logger.info("Output   → %s", output_osm)
-    logger.info("DuckDB   → %s  (in /tmp)", db_path)
-    logger.info("Memory   : %d GB  |  Tile size : %.4f°", memory_gb, tile_size)
-    logger.info("Min seg  : %.1e deg (≈ %.1f m)", MIN_SEG_LEN_DEG, MIN_SEG_LEN_DEG * 111_111)
-    logger.info("Snap tol : %.1e deg (≈ %.1f m)", SNAP_TOLERANCE, SNAP_TOLERANCE * 111_111)
-    logger.info("Log file → %s", os.path.abspath(LOG_FILE))
-    logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    logger.info("DuckDB   → %s", db_path)
+    logger.info("Memory   : %d GB", memory_gb)
+    logger.info("Rounding : %d digits (~%.1f cm at equator)",
+                ROUNDING_DIGITS, 10 ** (7 - ROUNDING_DIGITS) * 1.1)
+    logger.info("Snap N→N tight : %.5f° (~%.0f m)",
+                SNAP_TOL_TIGHT_DEG, SNAP_TOL_TIGHT_DEG * 111_111)
+    logger.info("Snap N→N wide  : %.5f° (~%.0f m)",
+                SNAP_TOL_WIDE_DEG,  SNAP_TOL_WIDE_DEG  * 111_111)
+    logger.info("Snap P→Edge    : %.5f° (~%.0f m)",
+                EDGE_SNAP_TOL_DEG,  EDGE_SNAP_TOL_DEG  * 111_111)
+    logger.info("Log      → %s", os.path.abspath(LOG_FILE))
+    logger.info("━" * 60)
 
 
     # Persistent .duckdb file:
@@ -918,396 +1091,238 @@ def build_osm_topology(input_file: str, output_osm: str, tile_size: float = 0.01
     #     ST_IsValid fast-paths the 95%+ of valid geometries.
     #     ST_MakeValid only runs for the rare invalid ones.
     # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🚀  Steps 1-3 · Ingest, clean, normalize, explode …")
+    logger.info("🚀  Step 1 · Ingest…")
     t = time.time()
 
-    geom_already_parsed = _read_input(con, input_file)
+    geom_parsed = _read_input(con, input_file)
     raw_count = con.execute("SELECT COUNT(*) FROM raw_segments").fetchone()[0]
-    logger.info("Raw rows ingested: %s", f"{raw_count:,}")
+    logger.info("Raw rows: %s  [%s]", f"{raw_count:,}", _elapsed(t))
 
-    # ── Validate + repair geometry ────────────────────────────────────────────
-    # Parquet path (geom_already_parsed=True):
-    #   DuckDB parsed the GeoParquet geometry column into GEOMETRY('EPSG:4326')
-    #   automatically during read_parquet(). geom_wkb IS already a GEOMETRY —
-    #   calling ST_GeomFromWKB on it would fail. We just validate/repair directly.
-    #
-    # GDAL path (geom_already_parsed=False):
-    #   geom_wkb is a raw BLOB of WKB bytes. ST_GeomFromWKB parses it.
-    #   try_cast(geom_wkb AS BLOB) IS NOT NULL guards against corrupt rows.
-    #
-    # In both cases ST_IsValid fast-paths the 95%+ of valid rows and
-    # ST_MakeValid only runs for the rare invalid geometries.
-    logger.info("   Validating + repairing geometry …")
-    if geom_already_parsed:
-        # geom_wkb is already GEOMETRY — validate directly, no WKB parsing needed
+    # Audit pkStreetID uniqueness — logs warnings if duplicates found.
+    # Pipeline is safe regardless because id is now ROW_NUMBER().
+    duped = con.execute("""
+        SELECT COUNT(*) - COUNT(DISTINCT orig_id) FROM raw_segments
+    """).fetchone()[0]
+    if duped:
+        logger.warning("pkStreetID has %s duplicates — surrogate id used (safe)", f"{duped:,}")
+    else:
+        logger.info("pkStreetID unique across all rows")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 2: Validate + repair geometry, explode MULTI* → LINESTRING parts
+    # ─────────────────────────────────────────────────────────────────────────
+    logger.info("🔧  Step 2 · Validate, repair, explode …")
+    t = time.time()
+
+    if geom_parsed:
         con.execute("""
-            CREATE OR REPLACE TABLE raw_segments_parsed AS
-            SELECT
-                id, name, oneway, lanes, maxspeed, highway,
-                CASE
-                    WHEN ST_IsValid(geom_wkb) THEN geom_wkb
-                    ELSE ST_MakeValid(geom_wkb)
-                END AS geom
-            FROM raw_segments
-            WHERE geom_wkb IS NOT NULL;
+            CREATE OR REPLACE TABLE segs_valid AS
+            SELECT id, orig_id, name, oneway, lanes, maxspeed, highway,
+                CASE WHEN ST_IsValid(geom_wkb) THEN geom_wkb
+                     ELSE ST_MakeValid(geom_wkb) END AS geom
+            FROM raw_segments WHERE geom_wkb IS NOT NULL;
         """)
     else:
         # geom_wkb is raw BLOB bytes — parse with ST_GeomFromWKB first
         con.execute("""
-            CREATE OR REPLACE TABLE raw_segments_parsed AS
-            SELECT
-                id, name, oneway, lanes, maxspeed, highway,
-                CASE
-                    WHEN ST_IsValid(ST_GeomFromWKB(geom_wkb)) THEN ST_GeomFromWKB(geom_wkb)
-                    ELSE ST_MakeValid(ST_GeomFromWKB(geom_wkb))
-                END AS geom
+            CREATE OR REPLACE TABLE segs_valid AS
+            SELECT id, orig_id, name, oneway, lanes, maxspeed, highway,
+                CASE WHEN ST_IsValid(ST_GeomFromWKB(geom_wkb))
+                     THEN ST_GeomFromWKB(geom_wkb)
+                     ELSE ST_MakeValid(ST_GeomFromWKB(geom_wkb)) END AS geom
             FROM raw_segments
             WHERE try_cast(geom_wkb AS BLOB) IS NOT NULL;
         """)
+    con.execute("DROP TABLE raw_segments;")
 
-    parsed_count = con.execute(
-        "SELECT COUNT(*) FROM raw_segments_parsed WHERE geom IS NOT NULL"
-    ).fetchone()[0]
-    dropped = raw_count - parsed_count
-    if dropped:
-        logger.warning("Dropped %s rows with corrupt/unparseable geometry", f"{dropped:,}")
+    valid_count = con.execute("SELECT COUNT(*) FROM segs_valid WHERE geom IS NOT NULL").fetchone()[0]
+    dropped_geom = raw_count - valid_count
+    if dropped_geom:
+        logger.warning("Dropped %s rows with corrupt/null geometry", f"{dropped_geom:,}")
 
-    geom_types = con.execute("""
-        SELECT ST_GeometryType(geom), COUNT(*)
-        FROM raw_segments_parsed WHERE geom IS NOT NULL GROUP BY 1
-    """).fetchall()
-    logger.info("Geometry types: %s", geom_types)
-    con.execute("DROP TABLE IF EXISTS raw_segments;")
-
-    # Explode MULTI* → LINESTRINGs, snap coordinates to 1-µdeg grid, dedup.
-    # WKB round-trip strips EPSG annotation → plain GEOMETRY type.
-    #
-
-    # Count dropped-by-vertex-cap BEFORE creating segments, while
-    # raw_segments_parsed is still available.
-    dropped_vtx, worst_vtx = con.execute(f"""
-        SELECT
-            COUNT(*) FILTER (WHERE ST_NPoints(geom_part) > {MAX_VERTICES}),
-            COALESCE(MAX(ST_NPoints(geom_part)), 0)
-        FROM (
-            SELECT UNNEST(ST_Dump(r.geom)).geom AS geom_part
-            FROM raw_segments_parsed r
-            WHERE r.geom IS NOT NULL
-        ) t
-    """).fetchone()
-    if dropped_vtx > 0:
-        logger.warning(
-            "Will drop %s segments exceeding %s-vertex cap (worst: %s pts)",
-            f"{dropped_vtx:,}", f"{MAX_VERTICES:,}", f"{worst_vtx:,}",
-        )
-    else:
-        logger.info(
-            "No segments exceed %s-vertex cap (max seen: %s pts)",
-            f"{MAX_VERTICES:,}", f"{worst_vtx:,}",
-        )
-
-    # Drop segments shorter than MIN_SEG_LEN_DEG BEFORE they enter the noding
-    # loop. A hairline segment fed into ST_Node can produce even shorter pieces
-    # as intersection slivers, compounding the Length=1 problem.
-    # The original threshold was 1e-8 — effectively no filter at all.
-    logger.info(
-        "Filtering + exploding segments (length > %.1e deg, precision grid %.1e) …",
-        MIN_SEG_LEN_DEG, PRECISION_GRID,
-    )
+    # Explode MULTI* → individual LINESTRING parts, drop pathological segments
     con.execute(f"""
         CREATE OR REPLACE TABLE segments AS
+        SELECT s.id, s.orig_id, s.name, s.oneway, s.lanes, s.maxspeed, s.highway,
+               UNNEST(ST_Dump(s.geom)).geom AS part_geom
+        FROM segs_valid s WHERE s.geom IS NOT NULL;
+    """)
+    # Apply filters as separate step so we can count drops
+    total_parts = con.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+
+    drop_vtx = con.execute(f"""
+        SELECT COUNT(*) FROM segments WHERE ST_NPoints(part_geom) > {MAX_VERTICES}
+    """).fetchone()[0]
+    drop_invalid = con.execute(f"""
+        SELECT COUNT(*) FROM segments 
+        WHERE ST_NPoints(part_geom) <= {MAX_VERTICES} AND NOT ST_IsValid(part_geom)
+    """).fetchone()[0]
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE segments_clean AS
+        SELECT id, orig_id, name, oneway, lanes, maxspeed, highway, part_geom AS geom
+        FROM segments
+        WHERE ST_NPoints(part_geom) >= 2
+          AND ST_NPoints(part_geom) <= {MAX_VERTICES}
+          AND ST_IsValid(part_geom);
+    """)
+    con.execute("DROP TABLE segments; DROP TABLE segs_valid;")
+
+    seg_count = con.execute("SELECT COUNT(*) FROM segments_clean").fetchone()[0]
+    logger.info("Parts: %s total → %s kept  (vtx_cap: %s, invalid: %s)  [%s]",
+                f"{total_parts:,}", f"{seg_count:,}",
+                f"{drop_vtx:,}", f"{drop_invalid:,}", _elapsed(t))
+    logger.info("Geometry types: %s", con.execute("""
+        SELECT ST_GeometryType(geom), COUNT(*) FROM segments_clean GROUP BY 1
+    """).fetchall())
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 3: Extract all vertices, round coordinates, deduplicate → node_ids
+    #
+    # This is the ogr2osm approach:
+    #   • Every vertex (lon, lat) is rounded to ROUNDING_DIGITS decimal places
+    #   • Two vertices at the same rounded coordinate → same OSM node ID
+    #   • No ST_Node, no tiling, no dropped segments
+    #   • Result: a dense node ID table and a vertex sequence table per way
+    # ─────────────────────────────────────────────────────────────────────────
+    logger.info("📌  Step 3 · Extract vertices, round, deduplicate nodes …")
+    t = time.time()
+    r = ROUNDING_DIGITS
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE all_vertices AS
+        WITH pts AS (
+            SELECT
+                s.id AS way_id,
+                UNNEST(ST_Dump(ST_Points(s.geom))) AS pt
+            FROM segments_clean s
+        )
         SELECT
-            id, name, oneway, lanes, maxspeed, highway,
-            ST_GeomFromWKB(ST_AsWKB(ST_ReducePrecision(geom_part, {PRECISION_GRID}))) AS geom
-        FROM (
-            SELECT r.id, r.name, r.oneway, r.lanes, r.maxspeed, r.highway,
-                   UNNEST(ST_Dump(r.geom)).geom AS geom_part
-            FROM raw_segments_parsed r
-            WHERE r.geom IS NOT NULL
-        ) exploded
-        -- Raise pre-node sliver threshold to MIN_SEG_LEN_DEG
-        WHERE ST_Length(geom_part) > {MIN_SEG_LEN_DEG}
-          AND ST_IsValid(geom_part)
-          AND ST_NPoints(geom_part) <= {MAX_VERTICES}
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY ST_AsText(geom_part)) = 1;
+            way_id,
+            ROW_NUMBER() OVER (PARTITION BY way_id ORDER BY (SELECT NULL)) AS seq,
+            ROUND(ST_X(pt.geom), {r})::DOUBLE AS lon,
+            ROUND(ST_Y(pt.geom), {r})::DOUBLE AS lat
+        FROM pts;
     """)
-    con.execute("DROP TABLE IF EXISTS raw_segments_parsed;")
+    con.execute("CHECKPOINT;")
 
-    seg_count = con.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
-    logger.info(
-        "Segments after explode + dedup + length filter: %s  [%s]",
-        f"{seg_count:,}", _elapsed(t),
-    )
-    # ── CRITICAL MEMORY SPLIT ─────────────────────────────────────────────────
-    # Materialise two separate narrow tables from `segments`:
-    #
-    #   seg_geoms  (id, geom)                — queried during noding
-    #   seg_attrs  (id, name, highway, …)    — joined in Step 5 by integer id
-    #
-    # Then DROP segments (the wide combined table) and CHECKPOINT both narrow
-    # tables to disk. DuckDB can now evict seg_geoms pages from the buffer pool
-    # and only reload one tile's worth of geometries at a time during noding.
-    #
-    # Without this split, querying `segments` inside _node_tile loads geometry
-    # AND all text columns for every matching row — roughly doubling the buffer
-    # pool pressure vs querying geom-only.
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("   Splitting segments → seg_geoms + seg_attrs …")
-    con.execute("CREATE OR REPLACE TABLE seg_geoms AS SELECT id, geom FROM segments;")
+    # Count vertices before dedup for logging
+    total_verts = con.execute("SELECT COUNT(*) FROM all_vertices").fetchone()[0]
+
+    # Unique (rounded) coordinate pairs → OSM node IDs (negative = new data)
     con.execute("""
-        CREATE OR REPLACE TABLE seg_attrs AS
-        SELECT id, name, highway, oneway, lanes, maxspeed FROM segments;
+        CREATE OR REPLACE TABLE node_ids AS
+        SELECT (ROW_NUMBER() OVER (ORDER BY lon, lat)) * -1 AS node_id, lat, lon
+        FROM (SELECT DISTINCT lat, lon FROM all_vertices);
     """)
-    con.execute("DROP TABLE IF EXISTS segments;")
+    con.execute("CREATE INDEX ni_lonlat ON node_ids (lon, lat);")
+
+    node_count = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    logger.info("Vertices: %s total → %s unique nodes  (%.1f%% shared)  [%s]",
+                f"{total_verts:,}", f"{node_count:,}",
+                (1 - node_count/total_verts)*100 if total_verts else 0, _elapsed(t))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP 4: Build way_nodes (ordered node refs per way)
+    # ─────────────────────────────────────────────────────────────────────────
+    logger.info("🔗  Step 4 · Build way_nodes …")
+    t = time.time()
+    con.execute("""
+        CREATE OR REPLACE TABLE way_nodes AS
+        SELECT v.way_id, v.seq, n.node_id
+        FROM all_vertices v JOIN node_ids n ON v.lon = n.lon AND v.lat = n.lat
+        ORDER BY v.way_id, v.seq;
+    """)
+    con.execute("DROP TABLE all_vertices;")
     con.execute("CHECKPOINT;")
-    logger.info(
-        "   seg_geoms + seg_attrs checkpointed to disk before snap + noding …"
-    )
-    # After CHECKPOINT, DuckDB marks these pages as clean and can evict them.
-    # The noding loop will only reload the pages for the current tile's bbox.
+    logger.info("Ways (raw): %s  [%s]",
+                f"{con.execute('SELECT COUNT(DISTINCT way_id) FROM way_nodes').fetchone()[0]:,}",
+                _elapsed(t))
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 3b: Snap near-miss endpoints across region boundaries
-    #
-    # Must run AFTER seg_geoms is materialised (uses its geometry) and BEFORE
-    # the noding loop (so that snapped endpoints are coincident when ST_Node
-    # runs, producing shared nodes across administrative boundaries).
+    # STEP 5: Build edges (way attributes)
     # ─────────────────────────────────────────────────────────────────────────
-    _snap_boundary_endpoints(con)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STEP 4: Tiled ST_Node — geometry only, parent ID tracked via src_id
-    # noded_segments contains (seg_id, geom, src_id) where src_id references
-    # segments.id. No spatial ops on attributes during noding → minimal RAM.
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🔀  Step 4 · Tiled ST_Node (geometry only, periodic checkpoint) …")
-    _tiled_node(con, tile_size)
-
-    # seg_geoms is no longer needed after noding
-    con.execute("DROP TABLE IF EXISTS seg_geoms;")
-    con.execute("CHECKPOINT;")
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STEP 5: Attribute join by integer ID
-    #
-    # Pure hash join on BIGINT — no geometry, no spatial ops, tiny RAM footlogger.info.
-    # seg_attrs has no geometry column, so the join touches only text+int data.
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🔗  Step 5 · Joining attributes by integer ID …")
+    logger.info("🔗  Step 5 · Build edges (attributes) …")
     t = time.time()
     con.execute("""
         CREATE OR REPLACE TABLE edges AS
         SELECT
-            n.seg_id                            AS way_id,
-            n.geom,
-            COALESCE(s.name,    'unknown')      AS name,
-            COALESCE(s.highway, 'road')         AS highway,
-            COALESCE(s.oneway,  'no')           AS oneway,
-            COALESCE(s.lanes,   '1')            AS lanes,
-            s.maxspeed
-        FROM noded_segments n
-        LEFT JOIN seg_attrs s ON n.src_id = s.id;
+            id                           AS way_id,
+            COALESCE(name,    'unknown') AS name,
+            COALESCE(highway, 'road')    AS highway,
+            COALESCE(oneway,  'no')      AS oneway,
+            COALESCE(lanes,   '1')       AS lanes,
+            maxspeed,
+            orig_id                      AS ref
+        FROM segments_clean;
     """)
-
-    # Free both source tables — geometry RAM released here
-    con.execute("DROP TABLE IF EXISTS noded_segments;")
-    con.execute("DROP TABLE IF EXISTS seg_attrs;")
-    con.execute("CHECKPOINT;")   # release buffer pool after big drop
-
-    way_count = con.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-    logger.info("Edges (ways): %s  [%s]", f"{way_count:,}", _elapsed(t))
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STEPS 6-7: Extract vertices → deduplicate → assign OSM node IDs
-    #
-    # ST_Points(geom)   → MULTIPOINT of all vertices, in order
-    # ST_Dump(...)      → array of STRUCT(geom POINT, path INTEGER[])
-    # UNNEST            → one row per vertex
-    # dump_struct.path[1] → 1-based position of vertex along the line
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("📌  Steps 6-7 · Extracting vertices, deduplicating nodes, assigning IDs …")
-    t = time.time()
-    con.execute("""
-        CREATE OR REPLACE TABLE edge_points AS
-        SELECT
-            e.way_id,
-            dump_struct.path[1]    AS seq,   -- 1-based vertex index along the line
-            ST_X(dump_struct.geom) AS lon,
-            ST_Y(dump_struct.geom) AS lat
-        FROM edges e,
-             UNNEST(ST_Dump(ST_Points(e.geom))) AS d(dump_struct)
-    """)
+    con.execute("DROP TABLE segments_clean;")
     con.execute("CHECKPOINT;")
-
-    # Index on (lon, lat) makes the join in Step 8 fast even at millions of rows
-    con.execute("CREATE INDEX ep_lonlat ON edge_points (lon, lat);")
-
-    # Deduplicate vertices; assign stable negative IDs (OSM convention for new data)
-    con.execute("""
-        CREATE OR REPLACE TABLE node_ids AS
-        SELECT
-            (ROW_NUMBER() OVER (ORDER BY lon, lat)) * -1 AS node_id,
-            lat, lon
-        FROM (SELECT DISTINCT lat, lon FROM edge_points);
-    """)
-
-    # Index for the Step 8 join
-    con.execute("CREATE INDEX ni_lonlat ON node_ids (lon, lat);")
-
-    node_count = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
-    logger.info("Unique nodes: %s  [%s]", f"{node_count:,}", _elapsed(t))
+    logger.info("Edges: %s  [%s]",
+                f"{con.execute('SELECT COUNT(*) FROM edges').fetchone()[0]:,}",
+                _elapsed(t))
 
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 8: Build ordered way→node reference list
+    # STEP 6: Topology validation
     # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🔗  Step 8 · Building way→node reference table …")
+    logger.info("━━  Step 6 · Topology validation ...")
     t = time.time()
-    con.execute("""
-        CREATE OR REPLACE TABLE way_nodes AS
-        SELECT ep.way_id, ep.seq, ni.node_id
-        FROM edge_points ep
-        JOIN node_ids ni ON ep.lon = ni.lon AND ep.lat = ni.lat
-        ORDER BY ep.way_id, ep.seq;
-    """)
-
-    con.execute("DROP TABLE IF EXISTS edge_points;")
-    con.execute("CHECKPOINT;")
-    logger.info("way_nodes built  [%s]", _elapsed(t))
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # STEP 8b: Topology validation
-    #
-    # Original code only dropped ways where (n_refs = 2 AND first_node = last_node).
-    # That missed:
-    #   A) ways with 3+ refs where ALL refs are the same node
-    #      (e.g.  -5 → -5 → -5  after precision snap)
-    #   B) ways where start_node == end_node but n_refs > 2
-    #      (longer apparent loop that Valhalla still can't route)
-    #
-    # NOTE: legitimate circular roads (roundabouts, cul-de-sac loops) are rare
-    # in a noded topology and are almost always represented as multiple short
-    # straight segments that do NOT form a single closed way — so this filter
-    # is safe to apply globally.
-    # ─────────────────────────────────────────────────────────────────────────
-    logger.info("🔍  Step 8b · Validating topology (dedup refs, drop degenerate ways) …")
-    t = time.time()
-
-    # Remove consecutive duplicate node refs within each way.
-    # LAG(node_id) OVER (PARTITION BY way_id ORDER BY seq) gives the previous
-    # node_id in sequence. We keep a row only if it differs from its predecessor
-    # (or if it is the first ref in the way, where LAG returns NULL).
-    con.execute("""
-        CREATE OR REPLACE TABLE way_nodes_clean AS
-        SELECT way_id, seq, node_id
-        FROM (
-            SELECT
-                way_id, seq, node_id,
-                LAG(node_id) OVER (PARTITION BY way_id ORDER BY seq) AS prev_node_id
-            FROM way_nodes
-        ) t
-        WHERE prev_node_id IS NULL          -- first ref in way — always keep
-           OR node_id != prev_node_id;      -- differs from previous — keep
-    """)
-
-    dup_refs = (
-        con.execute("SELECT COUNT(*) FROM way_nodes").fetchone()[0]
-        - con.execute("SELECT COUNT(*) FROM way_nodes_clean").fetchone()[0]
-    )
-    if dup_refs > 0:
+    dup_refs, n_degen = _clean_way_nodes(con, "initial validation")
+    if dup_refs:
         logger.warning("Removed %s consecutive duplicate node refs", f"{dup_refs:,}")
-    else:
-        logger.info("No consecutive duplicate node refs found")
-
-    # Detect and drop degenerate ways (loop / zero-length / all-same-node)
-    # Identify and drop degenerate ways:
-    #   - fewer than 2 refs after dedup  → not a valid OSM way
-    #   - start node == end node with only 2 refs → zero-length loop
-    con.execute("""
-        CREATE OR REPLACE TABLE degenerate_ways AS
-        SELECT way_id
-        FROM (
-            SELECT
-                way_id,
-                COUNT(*)                            AS n_refs,
-                COUNT(DISTINCT node_id)             AS n_distinct,
-                FIRST(node_id ORDER BY seq)         AS first_node,
-                LAST(node_id  ORDER BY seq)         AS last_node
-            FROM way_nodes_clean
-            GROUP BY way_id
-        ) stats
-        WHERE n_refs < 2                        -- fewer than 2 refs → invalid OSM way
-           OR n_distinct < 2                    -- all refs are the same node
-           OR first_node = last_node;           -- closed loop (any length)
-    """)
-
-    n_degen = con.execute("SELECT COUNT(*) FROM degenerate_ways").fetchone()[0]
-    if n_degen > 0:
-        logger.warning(
-            "Dropping %s degenerate ways (loop/zero-length/all-same-node)",
-            f"{n_degen:,}",
-        )
-        con.execute("""
-            DELETE FROM way_nodes_clean
-            WHERE way_id IN (SELECT way_id FROM degenerate_ways);
-        """)
-        con.execute("""
-            DELETE FROM edges
-            WHERE way_id IN (SELECT way_id FROM degenerate_ways);
-        """)
-
-    con.execute("DROP TABLE IF EXISTS way_nodes;")
-    con.execute("ALTER TABLE way_nodes_clean RENAME TO way_nodes;")
-    con.execute("DROP TABLE IF EXISTS degenerate_ways;")
+    if n_degen:
+        logger.warning("Dropped %s degenerate ways", f"{n_degen:,}")
     con.execute("CHECKPOINT;")
 
-    # Re-compute way_count after cleanup
-    way_count = con.execute("SELECT COUNT(DISTINCT way_id) FROM way_nodes").fetchone()[0]
     node_count = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
-    logger.info(
-        "After validation — Nodes: %s   Ways: %s  [%s]",
-        f"{node_count:,}", f"{way_count:,}", _elapsed(t),
-    )
+    way_count  = con.execute("SELECT COUNT(DISTINCT way_id) FROM way_nodes").fetchone()[0]
+    logger.info("After validation — nodes: %s  ways: %s  [%s]",
+                f"{node_count:,}", f"{way_count:,}", _elapsed(t))
+
+
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP 9: Stream OSM XML
-    #
-    # For country-scale output (19M nodes, 6M ways) the simple JOIN approach
-    # in _write_osm_xml spikes RAM because DuckDB must sort/hash 100M+ rows.
-    # We use a two-cursor approach instead:
-    #   Cursor 1: streams edges attributes (one row per way, no geometry)
-    #   Cursor 2: streams way_nodes (one row per vertex, pre-sorted)
-    # Both cursors advance in lockstep — pure Python merge, O(1) RAM.
+    # STEP 7: Boundary snap
     # ─────────────────────────────────────────────────────────────────────────
-    logger.info("📝  Step 9 · Streaming OSM XML → %s …", output_osm)
+    logger.info("━━  Step 7a · Node-to-node snap ...")
+    _snap_node_to_node(con)
+    node_count = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    way_count  = con.execute("SELECT COUNT(DISTINCT way_id) FROM way_nodes").fetchone()[0]
+    logger.info("After node-snap — nodes: %s  ways: %s",
+                f"{node_count:,}", f"{way_count:,}")
+
+    # ── Step 7b: Point-to-edge snapping ───────────────────────────────────────
+    logger.info("━━  Step 7b · Point-to-edge snap ...")
+    _snap_point_to_edge(con)
+    node_count = con.execute("SELECT COUNT(*) FROM node_ids").fetchone()[0]
+    way_count  = con.execute("SELECT COUNT(DISTINCT way_id) FROM way_nodes").fetchone()[0]
+    logger.info("After edge-snap — nodes: %s  ways: %s",
+                f"{node_count:,}", f"{way_count:,}")
+
+    # ── Step 8: Stream OSM XML ────────────────────────────────────────────────
+    logger.info("━━  Step 8 · Writing OSM XML → %s ...", output_osm)
     _write_osm_xml(con, output_osm, node_count, way_count)
 
-    logger.info("✅  Pipeline complete in %s  →  %s", _elapsed(pipeline_t0), output_osm)
     con.close()
-    # Optionally remove the working DuckDB file after success
-    # os.remove(db_path)
-
+    logger.info("━" * 60)
+    logger.info("Done in %s → %s", _elapsed(pipeline_t0), output_osm)
+    logger.info("Next: osmium cat %s -o output.osm.pbf", output_osm)
+    logger.info("━" * 60)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4, 5):
-        print("Usage: python build_osm_topology.py <input> <output.osm> [tile_size [memory_gb]]")
+    if len(sys.argv) not in (3, 4):
+        print("Usage: python build_osm_topology.py <input> <output.osm> [memory_gb]")
         print("  input      : .parquet (fastest), .gpkg, .geojson, .shp")
-        print("  tile_size  : degrees, default 0.015 (~1.5 km)")
         print("  memory_gb  : default 8. Use ~60% of available RAM (`free -h`)")
         print()
         print("  Convert to Parquet first for best performance:")
         print("    ogr2ogr -f Parquet out.parquet in.gpkg")
-        print()
-        print("  WSL memory tip — create C:\\Users\\<you>\\.wslconfig:")
-        print("    [wsl2]")
-        print("    memory=20GB")
-        print("    swap=8GB")
         sys.exit(1)
 
-    tile_size = float(sys.argv[3]) if len(sys.argv) >= 4 else 0.015
-    memory_gb = int(sys.argv[4])   if len(sys.argv) >= 5 else 8
-    build_osm_topology(sys.argv[1], sys.argv[2], tile_size, memory_gb)
+    memory_gb = int(sys.argv[3]) if len(sys.argv) == 4 else 8
+    build_osm_topology(sys.argv[1], sys.argv[2], memory_gb)
 
     print()
     print("Next step → OSM PBF:")

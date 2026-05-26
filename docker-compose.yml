@@ -51,7 +51,7 @@ services:
       - tile_urls=    # change if you want a smaller extract
       - use_tiles_ignore_pbf=False      # Once built, don't rebuild from PBF on restart
       - force_rebuild=True          # set True only when you want to force a full rebuild
-      - server_threads=4     # adjust to your CPU cores (4–8 is good for HCMC/Vietnam)
+      - server_threads=4     # adjust to your CPU cores 
       - build_elevation=False        # set True only if you need elevation data
       - build_admins=False
       - build_time_zones=False
@@ -63,7 +63,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 10
-      start_period: 300s   # first build can take a while for Vietnam
+      start_period: 500s   # first build can take a while 
 
   vroom:
     image: ghcr.io/vroom-project/vroom-docker:latest

@@ -11,10 +11,14 @@ Key rules
 * /optimize_route handles both VRP (vehicle has start+end) and TSP (open tour, no end).
 """
 
+import logging
 from contextlib import asynccontextmanager
+
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
+
+logger = logging.getLogger("georouting")
 
 # ---------------------------------------------------------------------------
 # Lifespan — shared async HTTP client
@@ -32,7 +36,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="GeoRouting Lab API",
     description="Proxy for Valhalla routing + VROOM optimisation",
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
@@ -52,18 +56,35 @@ client: httpx.AsyncClient = None  # type: ignore
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
-async def _forward(method: str, url: str, payload) -> dict:
-    """Forward a JSON payload to an upstream service. Raises HTTPException on failure."""
+async def _forward(method: str, url: str, payload: dict) -> dict:
+    """
+    Forward a JSON payload to an upstream service.
+
+    Now we:
+      1. Preserve the upstream status code exactly (400, 404, 422, etc.)
+      2. Include the full upstream JSON body in the HTTPException detail so
+         the browser console and the status bar show a useful message rather
+         than a bare 500.
+      3. Log the upstream error at WARNING level for server-side visibility.
+    """
     try:
         resp = await client.request(method, url, json=payload)
     except httpx.RequestError as exc:
+        logger.error("Upstream unreachable: %s -> %s", url, exc)
         raise HTTPException(status_code=503, detail=f"Upstream unreachable: {exc}")
 
     if resp.status_code != 200:
+        # FIX A1: extract and propagate upstream error detail
         try:
             detail = resp.json()
         except Exception:
-            detail = resp.text
+            detail = resp.text or f"Upstream returned {resp.status_code}"
+
+        logger.warning(
+            "Upstream error %d from %s: %s",
+            resp.status_code, url, detail
+        )
+        # Re-raise with the ORIGINAL upstream status code, not 500
         raise HTTPException(status_code=resp.status_code, detail=detail)
 
     return resp.json()
@@ -105,18 +126,16 @@ async def valhalla_route(request: Request):
     """
     Point-to-point or multi-stop route.
 
-    Minimal payload:
-    {
-      "locations": [{"lon": 106.63, "lat": 10.82}, {"lon": 106.70, "lat": 10.77}],
-      "costing": "auto"
-    }
-    Supports costing_options for route alternatives (use_highways, shortest, etc.)
+    Payload locations must use {lat, lon} objects (not arrays).
+    Valhalla returns 400 with a descriptive error if points are outside
+    the routable area — this is now forwarded to the client as-is.
     """
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    logger.debug("Route request: %s", payload)
     return await _forward("POST", f"{VALHALLA_URL}/route", payload)
 
 
@@ -142,17 +161,9 @@ async def valhalla_isochrone(request: Request):
     """
     Reachability polygons (isochrones / service areas).
 
-    Payload:
-    {
-      "locations": [{"lon": 106.63, "lat": 10.82}],
-      "costing": "auto",
-      "contours": [
-        {"time": 5,  "color": "ff4444"},
-        {"time": 10, "color": "ffaa00"},
-        {"time": 15, "color": "22cc66"}
-      ],
-      "polygons": true
-    }
+    Note: contour colors must be sent WITHOUT '#' prefix — Valhalla embeds
+    them verbatim into GeoJSON feature properties. The client is responsible
+    for re-adding '#' before using them in MapLibre paint expressions.
     """
     try:
         payload = await request.json()
@@ -189,25 +200,12 @@ async def vroom_optimize(request: Request):
 async def optimize_route(request: Request):
     """
     Optimise with VROOM then decode each route's encoded polyline into a
-    GeoJSON FeatureCollection for direct MapLibre consumption.
-
-    Supports both VRP (vehicle has start + end → returns to depot) and
-    TSP / open tour (vehicle has start only → no return leg).
-
-    Response:
-    {
-      "vroom":  { ...raw VROOM output... },
-      "geojson": {
-        "type": "FeatureCollection",
-        "features": [
-          {
-            "type": "Feature",
-            "geometry": { "type": "LineString", "coordinates": [[lng,lat],…] },
-            "properties": { "vehicle_id": 1, "duration": 3600, "distance": 12000 }
-          }
-        ]
-      }
-    }
+    GeoJSON FeatureCollection for direct MapLibre consumption.Now we:
+      1. Let _forward() exceptions propagate naturally (no wrapping try/except
+         around it — FastAPI's exception handler sends HTTPException to client).
+      2. Only wrap the GeoJSON decode step, which is pure Python and can't
+         produce an HTTPException.
+      3. Log the raw VROOM result at DEBUG so operators can inspect it.
     """
     try:
         payload = await request.json()
@@ -220,7 +218,9 @@ async def optimize_route(request: Request):
     payload["options"]["g"] = True
 
     vroom_result = await _forward("POST", VROOM_URL, payload)
+    logger.debug("VROOM result routes: %d", len(vroom_result.get("routes", [])))
 
+    # Decode geometry — this is pure Python; any failure here is a 500
     features = []
     for route in vroom_result.get("routes", []):
         encoded = route.get("geometry")
