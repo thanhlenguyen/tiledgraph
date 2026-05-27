@@ -401,15 +401,7 @@ CMD ["python", "app.py"]
   - shared nodes at intersections ✅
   - consistent node IDs across ways ✅
   - split lines where they intersect ✅
-```
-Raw GeoJSON/GeoPackage/Shapefile/Parquet
-   ↓
-DuckDB (validate + transform) ✅
-   ↓
-Parquet (fast storage) ✅
-   ↓
-OSM XML / PBF (for Valhalla)
-```
+
 - Transform data from original to osm format:
 ```
 # Road Attribute Priorities
@@ -438,7 +430,7 @@ OSM XML / PBF (for Valhalla)
 |              | tunnel          | yes                                                          | Critical for GPS-loss logic and display.                                |
 
 ```
-- Use python with DuckDB to transform source to osm format but fail, but if we want to use `parquet` file we can convert with `duckdb`
+- Use python scripts with DuckDB to transform source to osm format, before that we can convert spatial file to `parquet` file with `duckdb`
 
 ```sql
 INSTALL spatial;
@@ -451,149 +443,183 @@ COPY (
 TO 'street_ksa1.parquet'
 (FORMAT PARQUET, COMPRESSION ZSTD);
 ```
-#### Use ogr2osm to convert geo spatial file to osm file
-1. Install tools
-```bash
-# install ogr2osm
-sudo apt install python3-gdal gdal-bin
-python3 -m venv env
-source env/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install GDAL==3.11.4
-pip install git+https://github.com/roelderickx/ogr2osm.git --no-deps
-pip install osmium
+#### Create custom script to converts **any vector road dataset** (GeoParquet, GeoJSON, Shapefile, GPKG, etc.) into a **topologically correct OSM XML file** suitable for routing engines like **Valhalla**, **OSRM**, or **GraphHopper**.
 ```
-2. Prepare translate file
-street_translate.py:
-```python
-import ogr2osm
-
-class StreetsTranslation(ogr2osm.TranslationBase):
-
-    def filter_tags(self, tags):
-        if not tags:
-            return tags
-
-        osm_tags = {}
-
-        # === Names ===
-        if tags.get('ArabicName'):
-            osm_tags['name:ar'] = str(tags['ArabicName']).strip()
-
-        if tags.get('EnglishName'):
-            osm_tags['name'] = str(tags['EnglishName']).strip()
-
-        if tags.get('Strar'):
-            osm_tags['name:ar1'] = str(tags['Strar']).strip()   # alternative Arabic
-
-        if tags.get('Stren'):
-            osm_tags['name:en1'] = str(tags['Stren']).strip()   # alternative English
-
-        # === Highway (the most important field) ===
-        if tags.get('Subtype') is not None and tags.get('FOW') is not None:
-            subtype = str(tags['Subtype']).strip()
-            fowi = str(tags['FOW']).strip()
-            nolanes = tags.get('NoofLane')
-
-            try:
-                subtype = int(float(subtype))
-                fowi = int(float(fowi))
-            except (ValueError, TypeError):
-                subtype = 0
-                fowi = 0
-
-            if fowi in (3, 4):  # Link roads
-                if subtype == 1:
-                    osm_tags['highway'] = 'trunk_link'
-                elif subtype == 2:
-                    osm_tags['highway'] = 'primary_link'
-                elif subtype == 3:
-                    osm_tags['highway'] = 'secondary_link'
-                else:
-                    osm_tags['highway'] = 'tertiary_link'
-            else:  # Normal roads
-                if subtype == 1:
-                    osm_tags['highway'] = 'trunk'
-                elif subtype == 2:
-                    osm_tags['highway'] = 'primary'
-                elif subtype == 3:
-                    osm_tags['highway'] = 'primary' if (nolanes and int(float(nolanes or 0)) > 3) else 'secondary'
-                elif subtype == 4:
-                    osm_tags['highway'] = 'secondary' if (nolanes and int(float(nolanes or 0)) > 3) else 'tertiary'
-                elif subtype == 5:
-                    osm_tags['highway'] = 'tertiary'
-                elif subtype == 6:
-                    osm_tags['highway'] = 'residential'
-                elif subtype == 7:
-                    osm_tags['highway'] = 'footway'
-                else:
-                    osm_tags['highway'] = 'road'
-
-        # === Other attributes ===
-        if tags.get('Width'):
-            osm_tags['width'] = str(tags['Width']).strip()
-
-        if tags.get('NoOfLane'):
-            osm_tags['lanes'] = str(tags['NoOfLane']).strip()
-
-        if tags.get('SpeedLimit'):
-            osm_tags['maxspeed'] = str(tags['SpeedLimit']).strip()
-
-        # Oneway
-        if tags.get('Direction') is not None:
-            try:
-                cent = int(float(tags['Direction']))
-                osm_tags['oneway'] = 'yes' if cent == 1 else 'no'
-            except:
-                pass
-
-        # Junction
-        if tags.get('FOW') is not None:
-            try:
-                fowi = int(float(tags['FOW']))
-                if fowi == 1:
-                    osm_tags['junction'] = 'roundabout'
-            except:
-                pass
-
-        # Access
-        if tags.get('Status') is not None:
-            try:
-                stat = int(float(tags['Status']))
-                osm_tags['access'] = 'no' if stat == 3 else 'yes'
-            except:
-                pass
-
-        # Surface
-        if tags.get('Status') is not None:
-            try:
-                stat = int(float(tags['Status']))
-                if stat == 2:
-                    osm_tags['surface'] = 'gravel'
-                elif stat == 3:
-                    osm_tags['surface'] = 'dirt'
-                else:
-                    osm_tags['surface'] = 'asphalt'
-            except:
-                osm_tags['surface'] = 'asphalt'
-
-        # === Metadata ===
-        osm_tags['source'] = 'Your Dataset Name'   # ← Change this
-        if tags.get('pkStreetID'):
-            osm_tags['orig_id'] = str(tags['pkStreetID']).strip()
-
-        # Optional: keep any other useful fields that weren't mapped
-        for k, v in tags.items():
-            if v and k not in ['ArabicName', 'EnglishName', 'Strar', 'Stren', 'Width',
-                             'NoOfLane', 'SpeedLimit', 'Direction', 'FOW',
-                             'Status', 'Subtype', 'pkStreetID'] and k not in osm_tags:
-                osm_tags[k.lower()] = str(v).strip()
-
-        return osm_tags
+Raw GeoJSON/GeoPackage/Shapefile/Parquet
+   ↓
+DuckDB (validate + transform) ✅
+   ↓
+Parquet (fast storage) ✅
+   ↓
+OSM XML / PBF (for Valhalla)
 ```
-3. Convertion
+**Script:** `build_osm.py`
+
+##### 1. Overview
+This tool converts **any vector road dataset** (GeoParquet, GeoJSON, Shapefile, GPKG, etc.) into a **topologically correct OSM XML file** suitable for routing engines like **Valhalla**, **OSRM**, or **GraphHopper**.
+The main challenge it solves is **topological correctness**: ensuring that roads that should connect at intersections share the exact same node ID in the output OSM data.
+---
+##### 2. Purpose
+- Read road network data from various GIS formats.
+- Repair and clean geometries.
+- Create shared nodes where roads meet (including fixing small gaps).
+- Output a valid `.osm` XML file that can be converted to `.osm.pbf`.
+---
+##### 3. How It Works (High-Level)
+
+The pipeline consists of **8 major steps**:
+
+1. **Read input** into DuckDB.
+2. **Validate & repair** geometries, explode MultiLineStrings.
+3. **Extract & deduplicate vertices** → create node table.
+4. **Build way_nodes** (ordered list of nodes per road).
+5. **Build edges** (road attributes: name, highway type, etc.).
+6. **Initial topology cleanup**.
+7. **Connectivity fixes** (critical part):
+   - 7a: Node-to-node snapping.
+   - 7b: Point-to-edge snapping.
+8. **Write OSM XML**.
+---
+##### 4. Key Features
+
+- **Robust snapping** to fix real-world data gaps:
+  - Node-to-node (tight + wide tolerance)
+  - Point-to-edge projection (T-junctions, roundabout spokes)
+- Uses **DuckDB** with Spatial extension for high performance.
+- Memory-efficient streaming for very large datasets.
+- Comprehensive logging with progress bars.
+- Safe geometry handling (avoids GDAL crashes).
+---
+
+##### 5. Dependencies
+
 ```bash
-ogr2osm Street_centerline_new.gpkg -t street_translation.py -o street_ksa.osm
+pip install duckdb lxml tqdm
+Optional tools:
+
+osmium (for converting .osm → .osm.pbf)
+ogr2ogr (recommended to convert source to GeoParquet first)
+
+Usage
+Bashpython build_osm_topology.py <input_file> <output.osm> [memory_gb]
+Examples:
+Bash# Basic usage
+python build_osm_topology.py roads.parquet output.osm
+
+# With more memory
+python build_osm_topology.py roads.gpkg output.osm 16
+Next step:
+Bashosmium cat output.osm -o output.osm.pbf
+```
+#### Detailed Process
+##### Step 1: Input Ingestion
+
+- Reads source file using native DuckDB (for Parquet) or GDAL via st_read().
+- Creates raw_segments table with standardized columns:
+  - id (surrogate key)
+  - name, oneway, lanes, maxspeed
+  - highway (computed via HIGHWAY_SQL)
+  - Geometry as WKB
+
+##### Step 2: Geometry Validation & Explode
+
+- Repairs invalid geometries using ST_MakeValid().
+- Explodes MultiLineString into individual LineString features.
+- Filters out degenerate or overly complex segments (MAX_VERTICES).
+
+##### Step 3: Node Extraction & Deduplication
+
+- Extracts all vertices using ST_Points() + ST_Dump().
+- Rounds coordinates to ROUNDING_DIGITS (default 7 ≈ 1.1 cm).
+- Deduplicates vertices with same rounded coordinates → creates unique node_ids table.
+
+##### Step 4: Build way_nodes
+
+- Joins vertices back to their node IDs.
+- Preserves original order within each way.
+
+##### Step 5: Build Edges
+
+- Stores road attributes (name, highway, oneway, etc.) per way.
+
+##### Step 6: Initial Topology Cleanup
+
+- Removes consecutive duplicate node references.
+- Drops degenerate ways (fewer than 2 distinct nodes).
+
+##### Step 7a: Node-to-Node Snapping
+Two passes:
+- All endpoints, tight tolerance (≈ 2m)
+- Dangling endpoints only, wider tolerance (≈ 6m)
+Uses Union-Find (label propagation) to handle transitive merges efficiently.
+##### Step 7b: Point-to-Edge Snapping
+Two sub-steps:
+- Step A: Snap dangling endpoints to nearby existing nodes (≈ 2m).
+- Step B: For remaining dangling points:
+
+  - Build segment index.
+  - Project point onto nearest road segment using perpendicular foot calculation.
+  - Insert new shared node at projection point.
+  - Split the target segment.
+  - Remap dangling endpoint to new node.
+
+
+##### Tuneable Constants
+
+Constant,               Default,      Description
+ROUNDING_DIGITS,        7,            Coordinate precision
+SNAP_TOL_TIGHT_DEG,     0.00002,      ≈ 2m (all endpoints)
+SNAP_TOL_WIDE_DEG,      0.00005,      ≈ 6m (dangling only)
+ENDPOINT_SNAP_TOL_DEG,  0.00002,      Point-to-node snap
+EDGE_SNAP_TOL_DEG,      .00005,       Point-to-edge snap
+MAX_VERTICES,           "10,000",     Reject overly complex segments
+
+##### Core Helper Functions
+
+_build_dangle_table() — Identifies unconnected road ends.
+_union_find() — Efficient graph component merging via label propagation.
+_apply_labels() — Remaps merged nodes across tables.
+_clean_way_nodes() — Removes duplicates and degenerate ways.
+_snap_node_to_node() — Orchestrates node snapping.
+_snap_point_to_edge() — Handles complex T-junction fixes.
+_write_osm_xml() — Memory-efficient streaming XML writer using lxml.xmlfile.
+
+
+##### Logging & Monitoring
+
+- Creates timestamped log file: build_osm_topology_YYYYMMDD_HHMMSS.log
+- Uses tqdm progress bars.
+- Detailed timing and statistics at each step.
+
+
+##### Memory Management
+
+- DuckDB configured with user-defined memory limit.
+- Spills to disk when needed.
+- gc.collect() calls and strategic table drops.
+- Streaming XML output (O(1) memory for writing).
+
+
+##### Output Format
+Valid OSM XML with:
+
+- Negative node/way IDs (standard for new data).
+- Proper <node> and <way> elements.
+- Relevant tags: highway, name, oneway, lanes, maxspeed.
+
+
+##### Best Practices
+
+1. Convert source to GeoParquet first for best performance.
+2. Run on a machine with sufficient RAM (8–32 GB recommended depending on dataset size).
+3. Use WSL/Linux for better I/O performance.
+4. Always check the log file after running.
+
+#### Final convert to osm.pbf tile
+```bash
 osmium cat street_ksa.osm -o street_ksa.osm.pbf
 ```
-Note: ogr2osm does not sort data, so we cannot import to Valhalla
+
+Noted when testing script
+- Error when extract data when features have many nodes
+- This script do not create node when features cross together.
