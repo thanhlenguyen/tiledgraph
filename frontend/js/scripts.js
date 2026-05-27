@@ -1,11 +1,13 @@
 // =============================================================================
 // GeoRouting Lab — scripts.js
-// Feature 1: Multi-route comparison (Car / Bike / Walk, 3 alternatives, persists across style switches
-// Feature 2: VRP/TSP           — per-segment coloring by origin stop color
-// Feature 3: Isochrone         — configurable levels + interval
 //
-// Tab switching clears the OTHER feature's data from the map.
-// Routes survive style (layer) switches by re-drawing from stored GeoJSON.
+// Features:
+//  1. Route comparison        (Valhalla, 3 alternatives, Car/Bike/Walk)
+//  2. VRP / TSP               (VROOM, per-segment coloring)
+//  3. Isochrone               (Valhalla, configurable levels + interval)
+//  4. Nearest Facility        (Overpass API → Valhalla routing)
+//  5. Info Pointer            (click any map feature to inspect its properties)
+//  6. Building Search         (Elasticsearch, SPL Units + Vertical Addresses)
 // =============================================================================
 
 // ---------------------------------------------------------------------------
@@ -26,7 +28,9 @@ const API = {
   optimize: '/api/optimize_route',
   isochrone:'/api/isochrone',
 };
-const TIMEOUT = 120_000;
+const TIMEOUT = 120000;
+const ES_URL = 'http://localhost:9200';
+const OVERPASS  = 'https://overpass-api.de/api/interpreter';  // public Overpass API
 
 // ---------------------------------------------------------------------------
 // Colour palettes
@@ -41,6 +45,16 @@ const STOP_COLORS = [
   '#818cf8','#e879f9','#f9a8d4','#86efac','#fde68a'
 ];
 
+const ISO_COLORS = ['#22d98a', '#3b9eff', '#f5a623', '#f43f5e', '#a855f7'];
+
+// Facility type → OSM amenity tag + display config
+const FACILITY_CONFIG = {
+  hospital:     { amenity: 'hospital',     icon: '🏥', color: '#ef4444', label: 'Hospital'     },
+  fire_station: { amenity: 'fire_station', icon: '🚒', color: '#f97316', label: 'Fire Station'  },
+  police:       { amenity: 'police',       icon: '👮', color: '#8b5cf6', label: 'Police'        },
+  pharmacy:     { amenity: 'pharmacy',     icon: '💊', color: '#10b981', label: 'Pharmacy'      },
+};
+
 // ---------------------------------------------------------------------------
 // Global map state
 // ---------------------------------------------------------------------------
@@ -49,23 +63,35 @@ let currentCenter  = [46.597, 24.876];  // Default center Riyahd;
 let currentZoom    = 13;
 let currentPitch   = 0;
 let currentBearing = 0;
+let currentStyleId = 'default';
 
 // ---------------------------------------------------------------------------
 // Mode system — only one mode active at a time
 // ---------------------------------------------------------------------------
 const MODE = {
   NONE:  'none',
-  ROUTE: 'route',   // picking S then E for route comparison
-  VRP:   'vrp',     // adding stops for VRP/TSP
-  ISO:   'iso',     // single click for isochrone
+  ROUTE: 'route',       // picking S then E for route comparison
+  VRP:   'vrp',         // adding stops for VRP/TSP
+  ISO:   'iso',         // single click for isochrone
+  FACILITY: 'facility'  // single click for nearest facilities
 };
 let activeMode = MODE.NONE;
 
 function enterMode(mode) {
   activeMode = mode;
-  map.getCanvas().style.cursor = mode === MODE.NONE ? '' : 'crosshair';
+  const mapEl = document.getElementById('map');
+  if (mode !== MODE.NONE && !infoPointerActive) {
+    map.getCanvas().style.cursor = 'crosshair';
+    mapEl.classList.add('info-mode');
+  }
 }
-function exitMode() { enterMode(MODE.NONE); }
+function exitMode()  {
+  activeMode = MODE.NONE;
+  if (!infoPointerActive) {
+    map.getCanvas().style.cursor = '';
+    document.getElementById('map').classList.remove('info-mode');
+  }
+}
 
 // ===========================================================================
 // MAP INIT
@@ -92,31 +118,40 @@ function initMap() {
   map.addControl(new maplibregl.ScaleControl(),      'bottom-left');
   map.addControl(new LayerSwitcherControl(),         'bottom-right');
 
-  map.on('load', () => console.log('[map] loaded'));
-
-  // // For subsequent style switches, 'styledata' is still used but guarded with
-  // // a small idle-wait to ensure the new style is ready before layer restoration.
-  // let _initialLoadDone = false;
-  // map.once('idle', () => {
-  //   _initialLoadDone = true;
-  //   _restoreActiveLayers();
-  // });
-
-  // map.on('styledata', () => {
-  //   // Skip the very first styledata (handled by 'idle' above)
-  //   if (!_initialLoadDone) return;
-  //   // Wait for the new style to finish loading before restoring layers
-  //   map.once('idle', _restoreActiveLayers);
-  // });
-
-  map.on('click', (e) => {
-    const ll = [e.lngLat.lng, e.lngLat.lat];
-    if      (activeMode === MODE.ROUTE) routeHandleClick(ll);
-    else if (activeMode === MODE.VRP)   vrpHandleClick(ll);
-    else if (activeMode === MODE.ISO)   isoHandleClick(ll);
+  // Inject info-pointer button into top-right control group
+  map.once('load', () => {
+    _injectInfoPointerBtn();
+    console.log('[map] loaded');
   });
 
-  map.on('error', (e) => console.error('[map]', e));
+  map.on('styledata', () => {
+    map.once('idle', _restoreActiveLayers);
+  });
+
+  map.on('click', handleMapClick);
+
+  // Dataset radio listeners
+  document.querySelectorAll('input[name="dataset"]').forEach(r => {
+    r.addEventListener('change', e => {
+      currentDataset = e.target.value;
+      document.getElementById('results').innerHTML = '';
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Master click handler
+// ---------------------------------------------------------------------------
+function handleMapClick(e) {
+  if (infoPointerActive) {
+    handleInfoPointerClick(e);
+    return;
+  }
+  const ll = [e.lngLat.lng, e.lngLat.lat];
+  if      (activeMode === MODE.ROUTE)    routeHandleClick(ll);
+  else if (activeMode === MODE.VRP)      vrpHandleClick(ll);
+  else if (activeMode === MODE.ISO)      isoHandleClick(ll);
+  else if (activeMode === MODE.FACILITY) facilityHandleClick(ll);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,12 +163,20 @@ function _restoreActiveLayers() {
     _addRouteLayer(i, d.coordinates, d.color, d.dash);
   });
   // Re-draw VRP segments
-  vrpState.drawnSegments.forEach((seg) => {
+  vrpState.drawnSegments.forEach(seg => {
     _addVrpSegmentLayer(seg.srcId, seg.layerId, seg.coordinates, seg.color);
   });
   // Re-draw isochrone
   if (isoState.geojson) {
     _renderIso(isoState.geojson);
+  }
+  //Re-draw nearest facilities
+  if (facilityState.routeFeatures.length > 0){
+    _renderFacilityRoutes(facilityState.routeFeatures, facilityState.facilityType);
+  } 
+  //Restore point location
+  if (infoPointerActive) {
+    _setupInfoPointerLayers();
   }
 }
 
@@ -149,20 +192,469 @@ window.switchTab = (name) => {
   exitMode();
 
   // Clear data belonging to the OTHER features when switching
-  if (name === 'route') {
-    vrpFullClear();
-    isoFullClear();
-  } else if (name === 'vrp') {
-    routeFullClear();
-    isoFullClear();
-  } else if (name === 'isochrone') {
-    routeFullClear();
-    vrpFullClear();
+  if (name !== 'route')    routeFullClear();
+  if (name !== 'vrp')      vrpFullClear();
+  if (name !== 'isochrone') isoFullClear();
+  if (name !== 'facility') facilityFullClear();
+};
+
+// ============================================================================
+// SECTION A: INFO POINTER FEATURE
+// ============================================================================
+// When active, clicking any feature on the map shows its raw data properties
+// in a floating panel. Useful for inspecting building attributes, road types, etc.
+
+/**
+ * Turn the info pointer mode on or off.
+ * When ON:  the cursor changes, and clicking the map shows feature data.
+ * When OFF: clicking the map places markers as normal.
+ */
+
+let infoPointerActive = false;
+let _isDragging       = false;
+let _infoPanelDragOffset = { x: 0, y: 0 };
+
+function _injectInfoPointerBtn() {
+  const topRight = document.querySelector('.maplibregl-ctrl-top-right');
+  if (!topRight) return;
+
+  const group = document.createElement('div');
+  group.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  group.style.marginTop = '8px';
+
+  const btn = document.createElement('button');
+  btn.className = 'info-pointer-btn';
+  btn.type      = 'button';
+  btn.innerHTML = 'ℹ️';
+  btn.title     = 'Toggle Info Pointer';
+  btn.onclick   = () => toggleInfoPointer();
+
+  group.appendChild(btn);
+  topRight.appendChild(group);
+}
+
+window.toggleInfoPointer = function() {
+  infoPointerActive = !infoPointerActive;
+  const btn    = document.querySelector('.info-pointer-btn');
+  const panel  = document.getElementById('feature-info-panel');
+  const mapEl  = document.getElementById('map');
+
+  if (infoPointerActive) {
+    _setupInfoPointerLayers();
+    btn?.classList.add('active');
+    mapEl.classList.add('info-mode');
+    map.getCanvas().style.cursor = 'crosshair';
+    panel.classList.remove('hidden');
+    _resetInfoPanelPosition();
+    _setupDraggablePanel();
+    _updateFeatureInfo('<p class="info-hint">Click on any feature to inspect its properties</p>');
+  } else {
+    btn?.classList.remove('active');
+    mapEl.classList.remove('info-mode');
+    map.getCanvas().style.cursor = activeMode !== MODE.NONE ? 'crosshair' : '';
+    panel.classList.add('hidden');
+    _clearFeatureHighlight();
   }
 };
 
+document.addEventListener('DOMContentLoaded', () => {
+  const closeBtn = document.getElementById('close-feature-info');
+  if (closeBtn) closeBtn.onclick = () => {
+    if (infoPointerActive) toggleInfoPointer();
+  };
+});
+
+
+/**
+ * Create the hidden highlight layers that are used to visually mark
+ * the feature the user clicked on.
+ * There are three layers (fill, line, circle) to handle all geometry types.
+ */
+function _setupInfoPointerLayers() {
+  if (map.getSource('feature-highlight')) return;
+  map.addSource('feature-highlight', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] }
+  });
+  const layers = [
+    { id: 'hl-fill',   type: 'fill',   filter: ['==', ['geometry-type'], 'Polygon'],    paint: { 'fill-color': '#3b82f6', 'fill-opacity': 0.3 } },
+    { id: 'hl-line',   type: 'line',   filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'Polygon']], paint: { 'line-color': '#3b82f6', 'line-width': 2.5 } },
+    { id: 'hl-circle', type: 'circle', filter: ['==', ['geometry-type'], 'Point'],       paint: { 'circle-radius': 7, 'circle-color': '#3b82f6', 'circle-opacity': 0.7 } },
+  ];
+  layers.forEach(l => {
+    if (!map.getLayer(l.id)) map.addLayer({ ...l, source: 'feature-highlight' });
+  });
+}
+
+/**
+ * Handle a map click while the info pointer is active.
+ * Finds whatever feature is at the clicked pixel and displays its properties.
+ *
+ * @param {Object} e - The MapLibre click event (contains e.point = pixel coords)
+ */
+function handleInfoPointerClick(e) {
+  if (_isDragging) return;
+  const features = map.queryRenderedFeatures(e.point);
+  if (!features || features.length === 0) {
+    _clearFeatureHighlight();
+    _updateFeatureInfo('<p class="info-hint">No features at this location</p>');
+    return;
+  }
+  // Filter out our own overlay layers
+  const valid = features.filter(f => {
+    const id = f.layer.id;
+    return !id.startsWith('hl-') && !id.startsWith('route-src-') && !id.startsWith('vrp-') &&
+           !id.startsWith('iso-') && !id.startsWith('fac-') && !id.startsWith('search-hl');
+  });
+  if (!valid.length) {
+    _clearFeatureHighlight();
+    _updateFeatureInfo('<p class="info-hint">No base-layer features here</p>');
+    return;
+  }
+  const feat = valid[0];
+  _highlightFeature(feat);
+  _displayFeatureInfo(feat);
+}
+
+function _highlightFeature(feature) {
+  _clearFeatureHighlight();
+  const src = map.getSource('feature-highlight');
+  if (src) src.setData({ type: 'FeatureCollection', features: [feature] });
+}
+
+/**
+ * Update the highlight source to contain just the clicked feature,
+ * which causes the blue highlight to appear on the map.
+ *
+ * @param {Object} feature - A GeoJSON feature from queryRenderedFeatures()
+ */
+
+function _clearFeatureHighlight() {
+  const src = map.getSource('feature-highlight');
+  if (src) src.setData({ type: 'FeatureCollection', features: [] });
+}
+
+
+
+/**
+ * Display feature information in the info panel
+ * @param {Object} feature - GeoJSON feature to display
+ */
+function _displayFeatureInfo(feature) {
+  const props    = feature.properties || {};
+  const geomType = feature.geometry.type;
+
+  let html = `<div class="feature-layer-info">
+    <strong>Layer:</strong> ${feature.layer.id}<br>
+    <strong>Source layer:</strong> ${feature.sourceLayer || 'N/A'}<br>
+    <strong>Geometry:</strong> ${geomType}
+  </div>`;
+
+  const keys = Object.keys(props).sort();
+  if (keys.length > 0) {
+    keys.forEach(k => {
+      const val = props[k];
+      if (val === null || val === undefined) return;
+      const formatted = typeof val === 'object' ? JSON.stringify(val)
+                      : typeof val === 'number'  ? val.toLocaleString()
+                      : String(val);
+      const label = k === k.toUpperCase()
+        ? k.replace(/_/g, ' ')
+        : k.replace(/_/g, ' ').replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
+      html += `<div class="feature-property">
+        <span class="property-key">${label}</span>
+        <span class="property-value">${formatted}</span>
+      </div>`;
+    });
+  } else {
+    html += '<p class="info-hint" style="margin-top:8px">No properties available</p>';
+  }
+
+  _updateFeatureInfo(html);
+}
+
+/**
+ * Update the feature info panel content
+ * @param {Object} options - Options object
+ * @param {string} options.html - HTML content to display
+ */
+function _updateFeatureInfo(html) {
+  const el = document.getElementById('feature-info-content');
+  if (el) el.innerHTML = html;
+}
+
+
+//
+function _resetInfoPanelPosition() {
+  const panel = document.getElementById('feature-info-panel');
+  if (!panel) return;
+  panel.style.left      = 'auto';
+  panel.style.right     = '1rem';
+  panel.style.top       = '1rem';
+  panel.style.transform = 'none';
+}
+
+// ============================================================================
+// SECTION 6: DRAGGABLE PANEL
+// ============================================================================
+// Allows the user to click and drag the feature info panel to any position on screen.
+
+/**
+ * Attach mouse/touch drag handlers to the feature info panel's header bar.
+ * The panel can then be repositioned by dragging.
+ * 
+ * NOTE: We store handler references on the panel itself so we can remove them
+ * later if this function is called again, preventing stacked listeners.
+ */
+function _setupDraggablePanel() {
+    const panel  = document.getElementById('feature-info-panel');
+    const header = document.querySelector('.feature-info-header');
+    if (!panel || !header) return;
+
+    // Remove stacked listeners from previous activations
+    if (panel._dragStart) {
+        header.removeEventListener('mousedown',  panel._dragStart);
+        document.removeEventListener('mousemove', panel._drag);
+        document.removeEventListener('mouseup',   panel._dragEnd);
+    }
+
+    let dragging = false;
+    let ox = 0, oy = 0;
+    /**
+     * Start dragging
+     * @param {Event} e - Mouse or touch event
+     */
+  const dragStart = e => {
+    if (e.target.closest('.close-btn')) return;
+    dragging = true;
+    _isDragging = false;
+    const rect = panel.getBoundingClientRect();
+    ox = e.clientX - rect.left;
+    oy = e.clientY - rect.top;
+    panel.style.right     = 'auto';
+    panel.style.left      = rect.left + 'px';
+    panel.style.top       = rect.top  + 'px';
+    panel.style.transform = 'none';
+    e.preventDefault();
+  };
+  const drag = e => {
+    if (!dragging) return;
+    _isDragging = true;
+    const x = Math.max(0, Math.min(e.clientX - ox, window.innerWidth  - panel.offsetWidth));
+    const y = Math.max(0, Math.min(e.clientY - oy, window.innerHeight - panel.offsetHeight));
+    panel.style.left = x + 'px';
+    panel.style.top  = y + 'px';
+  };
+  const dragEnd = () => {
+    dragging = false;
+    setTimeout(() => { _isDragging = false; }, 50);
+  };
+
+  header.addEventListener('mousedown', dragStart);
+  document.addEventListener('mousemove', drag);
+  document.addEventListener('mouseup', dragEnd);
+
+  panel._dragStart = dragStart;
+  panel._drag      = drag;
+  panel._dragEnd   = dragEnd;
+}
+
 // =============================================================================
-// FEATURE 1 — ROUTE COMPARISON
+// SECTION B: SEARCH (Elasticsearch)
+// =============================================================================
+
+let currentDataset   = 'spl_units';
+let searchHighlights = [];
+let searchPopup      = null;
+
+// Toggle the search panel open/closed
+window.toggleSearchPanel = function() {
+  const section = document.getElementById('search-section');
+  section.classList.toggle('open');
+};
+
+// Search → called by button click or Enter key
+window.searchUnits = async function() {
+  const q = document.getElementById('searchInput').value.trim();
+  const resultsEl = document.getElementById('results');
+
+  if (!q) { resultsEl.innerHTML = ''; resultsEl.classList.remove('has-results'); return; }
+
+  resultsEl.innerHTML = '<div class="search-loading">Searching…</div>';
+  resultsEl.classList.add('has-results');
+  _openSearchPanel();
+  _searchClearHighlight();
+
+  const index  = currentDataset === 'spl_units' ? 'building_units' : 'buildings_vertical';
+  const fields = currentDataset === 'spl_units'
+    ? ['properties.UNIT_ID', 'properties.NAME^2', 'properties.NAME_LONG', 'properties.UnitAddres', 'properties.LabelNames']
+    : ['properties.UnitVerticalAddress^3', 'properties.fkShortAddress^1.8'];
+
+  const esQuery = {
+    query: { multi_match: { query: q, fields, type: 'best_fields', fuzziness: 'AUTO' } },
+    size: 20
+  };
+
+  try {
+    const res  = await fetch(`${ES_URL}/${index}/_search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(esQuery)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    resultsEl.innerHTML = '';
+
+    const hits = data.hits?.hits || [];
+    if (hits.length === 0) {
+      resultsEl.innerHTML = '<div class="search-no-results">No results found</div>';
+      return;
+    }
+
+    hits.forEach(hit => {
+      const feat  = hit._source;
+      const props = feat.properties || {};
+      const item  = document.createElement('div');
+      item.className = 'result-item';
+      const isUnit = currentDataset === 'spl_units';
+      if (isUnit) {
+        item.innerHTML = `<strong>${props.UNIT_ID || 'N/A'}</strong>
+          ${props.LabelNames || props.NAME_LONG || 'Unnamed'}
+          ${props.UnitAddres ? '· ' + props.UnitAddres : ''}<br>
+          <small>Floor: ${props.Base != null ? props.Base.toFixed(2) + 'm' : '—'} · Type: ${props.USE_TYPE || '—'}</small>`;
+      } else {
+        item.innerHTML = `<strong>${props.UnitVerticalAddress || props.fkFloorGUID || '—'}</strong>
+          Floor ${props.FloorID ?? '—'} · ${props.UseType || '—'}<br>
+          <small>Bldg height: ${props.BuildingHeight ? props.BuildingHeight.toFixed(1) + 'm' : '—'}</small>`;
+      }
+      item.onclick = () => _zoomToFeature(feat, item, isUnit);
+      resultsEl.appendChild(item);
+    });
+
+    // Expand sidebar search body to show results
+    _expandSearchBody(true);
+
+  } catch (err) {
+    resultsEl.innerHTML = `<div class="search-error">Error: ${err.message}</div>`;
+  }
+};
+
+function _openSearchPanel() {
+  document.getElementById('search-section').classList.add('open');
+}
+
+function _expandSearchBody(hasResults) {
+  const body = document.getElementById('search-body');
+  if (hasResults) {
+    // slide panel open further; results list expands internally via CSS
+    document.getElementById('results').classList.add('has-results');
+    document.getElementById('search-section').style.setProperty('--search-body-max', '420px');
+    body.style.maxHeight = '420px';
+  } else {
+    document.getElementById('results').classList.remove('has-results');
+    body.style.maxHeight = '';
+  }
+}
+
+function _searchClearHighlight() {
+  searchHighlights.forEach(id => {
+    if (map?.getLayer(id))  map.removeLayer(id);
+    if (map?.getSource(id)) map.removeSource(id);
+  });
+  searchHighlights = [];
+  if (searchPopup) { searchPopup.remove(); searchPopup = null; }
+  document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
+}
+
+async function _zoomToFeature(feature, itemEl, isUnit) {
+  document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
+  itemEl.classList.add('active');
+  _searchClearHighlight();
+
+  if (!feature.geometry) { setStatus('No geometry for this feature.', 'warn'); return; }
+
+  const bounds = new maplibregl.LngLatBounds();
+  const flatten = arr => {
+    if (typeof arr[0] === 'number') bounds.extend([arr[0], arr[1]]);
+    else arr.forEach(flatten);
+  };
+  flatten(feature.geometry.coordinates);
+  if (bounds.isEmpty()) { setStatus('Invalid geometry.', 'warn'); return; }
+
+  const props  = feature.properties || {};
+  const safeId = `search-hl-${Date.now()}`;
+  searchHighlights.push(safeId);
+
+  const hasHeight = isUnit && props.Base != null;
+
+  const doHighlight = () => {
+    if (map.getSource(safeId)) map.removeSource(safeId);
+    map.addSource(safeId, {
+      type: 'geojson',
+      data: { type: 'Feature', geometry: feature.geometry, properties: props }
+    });
+
+    if (hasHeight) {
+      const base   = props.Base || 0;
+      const height = base + (props.HEIGHT || 4.25);
+      map.addLayer({ id: safeId, type: 'fill-extrusion', source: safeId,
+        paint: { 'fill-extrusion-color': '#ff7c3b', 'fill-extrusion-opacity': 0.9,
+                 'fill-extrusion-base': base, 'fill-extrusion-height': height } });
+    } else {
+      map.addLayer({ id: safeId, type: 'fill', source: safeId,
+        paint: { 'fill-color': '#ff7c3b', 'fill-opacity': 0.55 } });
+      map.addLayer({ id: safeId + '-line', type: 'line', source: safeId,
+        paint: { 'line-color': '#ff7c3b', 'line-width': 2 } });
+      searchHighlights.push(safeId + '-line');
+    }
+
+    const sidebarW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) + 20;
+    map.fitBounds(bounds, {
+      padding: { top: 80, bottom: 80, left: sidebarW, right: 80 },
+      maxZoom: 19.5, duration: 1400, essential: true, pitch: hasHeight ? 55 : 0
+    });
+
+    const ne = bounds.getNorthEast(), sw = bounds.getSouthWest();
+    const popupLng = ne.lng + (ne.lng - sw.lng) * 0.2;
+    const popupLat = sw.lat + (ne.lat - sw.lat) * 0.65;
+
+    setTimeout(() => {
+      let html = `<div style="font-size:12px;line-height:1.6;color:var(--text)">
+        <strong style="color:var(--text);font-size:13px">${props.NAME || props.UnitVerticalAddress || props.UNIT_ID || 'Feature'}</strong><br>`;
+      if (isUnit) {
+        html += `<b>ID:</b> ${props.UNIT_ID || '—'}<br>
+                 <b>Type:</b> ${props.USE_TYPE || '—'}<br>
+                 <b>Floor:</b> ${props.Base != null ? props.Base.toFixed(2) + 'm' : '—'}`;
+      } else {
+        html += `<b>Address:</b> ${props.UnitVerticalAddress || '—'}<br>
+                 <b>Floor:</b> ${props.FloorID ?? '—'}<br>
+                 <b>Usage:</b> ${props.UseType || '—'}`;
+      }
+      html += '</div>';
+      searchPopup = new maplibregl.Popup({ offset: 12, closeButton: true, maxWidth: '260px' })
+        .setLngLat([popupLng, popupLat]).setHTML(html).addTo(map);
+      searchPopup.on('close', () => { searchPopup = null; });
+    }, 900);
+  };
+
+  // Switch to BDF style for 3D if needed
+  const needsBDF = hasHeight;
+  if (needsBDF && currentStyleId !== 'bdf') {
+    const bdf = STYLES.find(s => s.id === 'bdf');
+    if (bdf) {
+      currentStyleId = 'bdf';
+      map.setStyle(bdf.url);
+      document.querySelectorAll('.layer-switcher button').forEach(b =>
+        b.classList.toggle('active', b.textContent === 'BDF'));
+      map.once('idle', () => { _restoreActiveLayers(); map.once('idle', doHighlight); });
+    } else { doHighlight(); }
+  } else {
+    doHighlight();
+  }
+}
+
+// =============================================================================
+// SECTION C: ROUTE COMPARISON (Valhalla)
 // =============================================================================
 
 let routeProfile = 'auto';
@@ -225,10 +717,7 @@ function routeHandleClick(lngLat) {
   routeState.points.push(lngLat);
 
   const isStart = routeState.points.length === 1;
-  const color   = isStart ? '#22d98a' : '#ff5c5c';
-  const label   = isStart ? 'S' : 'E';
-
-  const el = _makeStopEl(label, color);
+  const el = _makeStopEl(isStart ? 'S' : 'E', isStart ? '#22d98a' : '#ff5c5c');
   const m  = new maplibregl.Marker({ element: el })
     .setLngLat(lngLat)
     .setPopup(new maplibregl.Popup({ offset: 18 }).setHTML(
@@ -296,8 +785,7 @@ async function _runRouteComparison() {
       locations: base, costing: p,
       costing_options: {
         [p]: p === 'auto'      ? { use_highways: 0.05, use_tolls: 0.0 }
-           : p === 'bicycle'   ? { use_roads: 0.1, use_hills: 0.3 }
-          //  : p === 'pedestrian'? { use_roads: 0.1 }
+           : p === 'bicycle'   ? { use_roads: 0.1}
            :                     {}
       },
       directions_options: { language: 'en-US' }
@@ -391,7 +879,7 @@ function _addRouteLayer(i, coordinates, color, dash) {
 }
 
 // =============================================================================
-// FEATURE 2 — VRP / TSP
+// SECTION D: VRP / TSP
 // =============================================================================
 
 let vrpProfile = 'auto';
@@ -695,15 +1183,11 @@ function _addVrpSegmentLayer(srcId, layerId, coordinates, color) {
 }
 
 // =============================================================================
-// FEATURE 3 — ISOCHRONE
+// SECTION E: ISOCHRONE (Valhalla)
 // =============================================================================
 
 let isoProfile  = 'auto';
 let isoInterval = 10;
-
-// Colours: innermost ring (shortest time) → outermost (longest time)
-// We render outermost first so inner rings paint on top
-const ISO_COLORS = ['#22d98a', '#3b9eff', '#f5a623', '#f43f5e', '#a855f7'];
 
 const isoState = {
   geojson:      null,
@@ -796,17 +1280,6 @@ async function isoHandleClick(lngLat) {
 
   try {
     const geojson = await fetchJSON(API.isochrone, payload);
-
-    // // Valhalla returns color as a hex string without '#' in feature properties.
-    // // Re-inject '#' so MapLibre's ['get', 'color'] paint expression works.
-    // if (geojson?.features) {
-    //   geojson.features.forEach(f => {
-    //     if (f.properties?.color && !f.properties.color.startsWith('#')) {
-    //       f.properties.color = '#' + f.properties.color;
-    //     }
-    //   });
-    // }
-
     isoState.geojson = geojson;
     _isoRemoveLayers();
     _renderIso(geojson);
@@ -857,6 +1330,278 @@ function _isoRemoveLayers() {
   if (map.getSource(ISO_SRC))   map.removeSource(ISO_SRC);
 }
 
+
+// =============================================================================
+// SECTION C: NEAREST FACILITY (Overpass → Valhalla)
+// =============================================================================
+
+let facilityType = 'hospital';
+
+const facilityState = {
+  originMarker:  null,
+  originLngLat:  null,
+  facMarkers:    [],        // maplibregl.Marker[]
+  routeFeatures: [],        // GeoJSON features for all facility routes
+  facilityType:  'hospital'
+};
+
+const FAC_ROUTE_SRC = 'fac-routes';
+const FAC_ROUTE_LYR = 'fac-routes-lyr';
+
+window.facilitySetType = btn => {
+  document.querySelectorAll('#facility-type-seg .seg').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  facilityType = btn.dataset.ftype;
+};
+
+window.facilityActivate = () => {
+  enterMode(MODE.FACILITY);
+  _setBtnPicking('fac-pick-btn', true);
+  setStatus('Click the map to search for nearby facilities.', 'pick');
+};
+
+window.facilityClear = () => {
+  exitMode();
+  facilityFullClear();
+  setStatus('', 'info');
+};
+
+function facilityFullClear() {
+  exitMode();
+  if (facilityState.originMarker) { facilityState.originMarker.remove(); facilityState.originMarker = null; }
+  facilityState.facMarkers.forEach(m => { if (m._popup?.isOpen()) m._popup.remove(); m.remove(); });
+  facilityState.facMarkers   = [];
+  facilityState.originLngLat = null;
+  facilityState.routeFeatures = [];
+  facilityState.facilityType  = 'hospital';
+  _removeFacilityRouteLayers();
+  document.getElementById('fac-legend').classList.add('hidden');
+  document.getElementById('fac-legend').innerHTML = '';
+  document.getElementById('fac-status').textContent = '';
+  _setBtnPicking('fac-pick-btn', false);
+}
+
+function _removeFacilityRouteLayers() {
+  if (map.getLayer(FAC_ROUTE_LYR)) map.removeLayer(FAC_ROUTE_LYR);
+  if (map.getSource(FAC_ROUTE_SRC)) map.removeSource(FAC_ROUTE_SRC);
+}
+
+function facilityHandleClick(lngLat) {
+  // Clear previous search except origin marker (we replace it)
+  facilityState.facMarkers.forEach(m => { if (m._popup?.isOpen()) m._popup.remove(); m.remove(); });
+  facilityState.facMarkers = [];
+  _removeFacilityRouteLayers();
+  facilityState.routeFeatures = [];
+  document.getElementById('fac-legend').classList.add('hidden');
+
+  // Place origin marker
+  if (facilityState.originMarker) facilityState.originMarker.remove();
+  const el = _makeStopEl('📍', '#e2e8f0');
+  el.style.background = 'transparent';
+  el.style.border     = 'none';
+  el.style.fontSize   = '20px';
+  el.style.filter     = 'drop-shadow(0 2px 4px rgba(0,0,0,0.6))';
+  facilityState.originMarker = new maplibregl.Marker({ element: el })
+    .setLngLat(lngLat).addTo(map);
+  facilityState.originLngLat = lngLat;
+  facilityState.facilityType = facilityType;
+
+  exitMode();
+  _setBtnPicking('fac-pick-btn', false);
+  _runFacilitySearch(lngLat, facilityType);
+}
+
+async function _runFacilitySearch(lngLat, ftype) {
+  const cfg     = FACILITY_CONFIG[ftype] || FACILITY_CONFIG.hospital;
+  const count   = parseInt(document.getElementById('fac-count').value, 10)  || 5;
+  const radiusKm = parseInt(document.getElementById('fac-radius').value, 10) || 5;
+  const radiusM  = radiusKm * 1000;
+
+  setStatus(`Searching Overpass for ${cfg.label}s within ${radiusKm} km…`, 'loading');
+  document.getElementById('fac-status').textContent = '';
+
+  // Query Overpass for the amenity type within radius
+  const overpassQuery = `
+    [out:json][timeout:25];
+    (
+      node["amenity"="${cfg.amenity}"](around:${radiusM},${lngLat[1]},${lngLat[0]});
+      way["amenity"="${cfg.amenity}"](around:${radiusM},${lngLat[1]},${lngLat[0]});
+    );
+    out center ${count * 3};
+  `;
+
+  let facilities = [];
+  try {
+    const res  = await fetch(OVERPASS, {
+      method: 'POST',
+      body:   'data=' + encodeURIComponent(overpassQuery)
+    });
+    if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+    const data = await res.json();
+
+    // Parse Overpass elements into {name, lat, lon}
+    facilities = data.elements.map(el => {
+      const lat = el.lat ?? el.center?.lat;
+      const lon = el.lon ?? el.center?.lon;
+      const name = el.tags?.name || el.tags?.['name:en'] || cfg.label;
+      return { lat, lon, name };
+    }).filter(f => f.lat && f.lon);
+
+    if (!facilities.length) {
+      setStatus(`No ${cfg.label}s found within ${radiusKm} km.`, 'warn');
+      return;
+    }
+
+    // Sort by straight-line distance, take top N
+    facilities = facilities.map(f => ({
+      ...f,
+      dist: _haversineKm(lngLat[1], lngLat[0], f.lat, f.lon)
+    })).sort((a, b) => a.dist - b.dist).slice(0, count);
+
+    setStatus(`Found ${facilities.length} ${cfg.label}(s). Routing…`, 'loading');
+
+  } catch (err) {
+    setStatus(`Overpass error: ${err.message}`, 'error');
+    return;
+  }
+
+  // Route from origin to each facility (parallel)
+  const routeResults = await Promise.allSettled(
+    facilities.map(f =>
+      fetchJSON(API.route, {
+        locations: [
+          { lat: lngLat[1], lon: lngLat[0] },
+          { lat: f.lat,     lon: f.lon      }
+        ],
+        costing: 'auto',
+        directions_options: { language: 'en-US' }
+      }).then(r => ({ facility: f, trip: r.trip }))
+    )
+  );
+
+  // Draw results
+  const allFeatures = [];
+  const results     = [];
+
+  routeResults.forEach((res, i) => {
+    if (res.status !== 'fulfilled' || !res.value.trip) return;
+    const { facility, trip } = res.value;
+    const coords = trip.legs.flatMap(leg => decodePolyline6(leg.shape));
+    const km     = trip.summary.length.toFixed(1);
+    const mins   = Math.round(trip.summary.time / 60);
+
+    allFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coords },
+      properties: { rank: i + 1, km, mins, name: facility.name }
+    });
+
+    results.push({ ...facility, km, mins, rank: i + 1 });
+  });
+
+  if (!results.length) {
+    setStatus('Could not route to any facilities.', 'warn');
+    return;
+  }
+
+  // Save for style restores
+  facilityState.routeFeatures = allFeatures;
+
+  // Draw route lines
+  _renderFacilityRoutes(allFeatures, ftype);
+
+  // Draw facility markers
+  results.forEach((f, i) => {
+    const el = document.createElement('div');
+    el.className = 'fac-marker';
+    el.style.background = cfg.color;
+    el.innerHTML = cfg.icon;
+
+    const badge = document.createElement('div');
+    badge.className = 'fac-badge';
+    badge.style.borderColor = cfg.color;
+    badge.style.color       = cfg.color;
+    badge.textContent       = i + 1;
+    el.appendChild(badge);
+
+    const popup = new maplibregl.Popup({ offset: 20, closeButton: true, maxWidth: '220px' })
+      .setHTML(`<div style="font-size:12px;line-height:1.6;color:var(--text)">
+        <div style="font-size:20px;margin-bottom:4px">${cfg.icon}</div>
+        <strong style="color:var(--text)">${f.name}</strong><br>
+        <span style="color:#22d98a">⏱ ${f.mins} min</span>
+        &nbsp;·&nbsp;<span style="color:var(--text-dim)">${f.km} km</span><br>
+        <small style="color:var(--text-faint)">Rank #${f.rank} · ${f.dist.toFixed(1)} km straight-line</small>
+      </div>`);
+
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center', offset: [0, -4] })
+      .setLngLat([f.lon, f.lat])
+      .setPopup(popup)
+      .addTo(map);
+
+    marker._popup = popup;
+    el.addEventListener('mouseenter', () => { if (!popup.isOpen()) marker.togglePopup(); });
+    el.addEventListener('mouseleave', () => { setTimeout(() => { if (popup.isOpen()) marker.togglePopup(); }, 200); });
+
+    facilityState.facMarkers.push(marker);
+  });
+
+  // Build legend
+  const legendEl = document.getElementById('fac-legend');
+  legendEl.innerHTML = '';
+  results.forEach((f, i) => {
+    const item = document.createElement('div');
+    item.className = 'fac-item';
+    item.onclick   = () => facilityState.facMarkers[i]?.togglePopup();
+    item.innerHTML = `
+      <div class="fac-rank" style="background:${cfg.color}">${f.rank}</div>
+      <div class="fac-info">
+        <div class="fac-name">${f.name}</div>
+        <div class="fac-meta">⏱ ${f.mins} min · ${f.km} km driving · ${f.dist.toFixed(1)} km straight</div>
+      </div>`;
+    legendEl.appendChild(item);
+  });
+  legendEl.classList.remove('hidden');
+
+  // Zoom to fit all
+  const bounds = new maplibregl.LngLatBounds();
+  bounds.extend(lngLat);
+  results.forEach(f => bounds.extend([f.lon, f.lat]));
+  map.fitBounds(bounds, {
+    padding: { top: 80, bottom: 80, left: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) + 20, right: 80 },
+    maxZoom: 14, duration: 1200
+  });
+
+  const closest = results[0];
+  setStatus(`✅ ${results.length} ${cfg.label}(s) found — nearest is ${closest.name} (${closest.mins} min)`, 'success');
+  document.getElementById('fac-status').textContent = `${results.length} result${results.length > 1 ? 's' : ''} — click to see details`;
+}
+
+function _renderFacilityRoutes(features, ftype) {
+  _removeFacilityRouteLayers();
+  const cfg = FACILITY_CONFIG[ftype] || FACILITY_CONFIG.hospital;
+  map.addSource(FAC_ROUTE_SRC, {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features }
+  });
+  map.addLayer({
+    id: FAC_ROUTE_LYR, type: 'line', source: FAC_ROUTE_SRC,
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color': cfg.color,
+      'line-width': ['interpolate', ['linear'], ['get', 'rank'], 1, 5, 5, 2.5],
+      'line-opacity': 0.8
+    }
+  });
+}
+
+function _haversineKm(lat1, lon1, lat2, lon2) {
+  const R  = 6371;
+  const dL = (lat2 - lat1) * Math.PI / 180;
+  const dO = (lon2 - lon1) * Math.PI / 180;
+  const a  = Math.sin(dL/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dO/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
 // ===========================================================================
 // LAYER SWITCHER CONTROL
 // ===========================================================================
@@ -872,20 +1617,11 @@ class LayerSwitcherControl {
       btn.addEventListener('click', () => {
         this._container.querySelectorAll('button').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        currentStyleId = s.id;
         map.setStyle(s.url);
-        // Wait for the new style to be fully loaded and idle before doing anything.
-        // We use two idle calls: the first to easeTo (which itself triggers rendering),
-        // the second to restore layers after the camera animation settles.
         map.once('idle', () => {
-          map.easeTo({
-            center: currentCenter, zoom: s.zoom ?? currentZoom,
-            pitch: s.pitch ?? currentPitch, bearing: s.bearing ?? currentBearing,
-            duration: 800
-          });
-          // Wait for the easeTo animation to finish, then restore layers
-          map.once('idle', () => {
-            _restoreActiveLayers();
-          });
+          map.easeTo({ center: currentCenter, zoom: s.zoom ?? currentZoom, pitch: s.pitch ?? currentPitch, bearing: s.bearing ?? currentBearing, duration: 800 });
+          map.once('idle', _restoreActiveLayers);
         });
       });
       this._container.appendChild(btn);
@@ -973,9 +1709,9 @@ function _setBtnPicking(id, on) {
   if (btn) btn.classList.toggle('picking', on);
 }
 
-// =============================================================================
-// Boot
-// =============================================================================
+// ===========================================================================
+// BOOT
+// ===========================================================================
 window.addEventListener('load', initMap);
 // Expose internals needed by inline oninput handlers in index.html
 window.isoState       = isoState;
