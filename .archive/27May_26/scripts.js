@@ -5,7 +5,7 @@
 //  1. Route comparison        (Valhalla, 3 alternatives, Car/Bike/Walk)
 //  2. VRP / TSP               (VROOM, per-segment coloring)
 //  3. Isochrone               (Valhalla, configurable levels + interval)
-//  4. Nearest Facility        (PostGIS spatial query → Valhalla routing)
+//  4. Nearest Facility        (Overpass API → Valhalla routing)
 //  5. Info Pointer            (click any map feature to inspect its properties)
 //  6. Building Search         (Elasticsearch, SPL Units + Vertical Addresses)
 // =============================================================================
@@ -23,15 +23,14 @@ const STYLES = [
 // ---------------------------------------------------------------------------
 // API endpoints  (via Nginx /api/ proxy)
 // ---------------------------------------------------------------------------
-const BACKEND_URL = '/api';  // Nginx proxies /api/ → routing-api:5000
 const API = {
-  route:          `${BACKEND_URL}/route`,
-  optimize:       `${BACKEND_URL}/optimize_route`,
-  isochrone:      `${BACKEND_URL}/isochrone`,
-  nearestFacility:`${BACKEND_URL}/nearest_facility`,   // PostGIS + Valhalla
+  route:    '/api/route',
+  optimize: '/api/optimize_route',
+  isochrone:'/api/isochrone',
 };
 const TIMEOUT = 120000;
 const ES_URL = 'http://localhost:9200';
+const OVERPASS  = 'https://overpass-api.de/api/interpreter';  // public Overpass API
 
 // ---------------------------------------------------------------------------
 // Colour palettes
@@ -48,13 +47,12 @@ const STOP_COLORS = [
 
 const ISO_COLORS = ['#22d98a', '#3b9eff', '#f5a623', '#f43f5e', '#a855f7'];
 
-// Facility type → display config.
-// Keys MUST match _ALLOWED_FACILITY_TYPES in app.py and data-ftype in index.html.
+// Facility type → OSM amenity tag + display config
 const FACILITY_CONFIG = {
-  'hospital':     { icon: '🏥', color: '#ef4444', label: 'Hospital'     },
-  'fire station': { icon: '🚒', color: '#f97316', label: 'Fire Station'  },
-  'police':       { icon: '👮', color: '#8b5cf6', label: 'Police'        },
-  'clinic':       { icon: '🩺', color: '#10b981', label: 'Clinic'        },
+  hospital:     { amenity: 'hospital',     icon: '🏥', color: '#ef4444', label: 'Hospital'     },
+  fire_station: { amenity: 'fire_station', icon: '🚒', color: '#f97316', label: 'Fire Station'  },
+  police:       { amenity: 'police',       icon: '👮', color: '#8b5cf6', label: 'Police'        },
+  pharmacy:     { amenity: 'pharmacy',     icon: '💊', color: '#10b981', label: 'Pharmacy'      },
 };
 
 // ---------------------------------------------------------------------------
@@ -87,7 +85,7 @@ function enterMode(mode) {
     mapEl.classList.add('info-mode');
   }
 }
-function exitMode() {
+function exitMode()  {
   activeMode = MODE.NONE;
   if (!infoPointerActive) {
     map.getCanvas().style.cursor = '';
@@ -305,9 +303,8 @@ function handleInfoPointerClick(e) {
   // Filter out our own overlay layers
   const valid = features.filter(f => {
     const id = f.layer.id;
-    return !id.startsWith('hl-')       && !id.startsWith('route-src-') &&
-           !id.startsWith('vrp-')      && !id.startsWith('iso-') &&
-           !id.startsWith('fac-')      && !id.startsWith('search-hl');
+    return !id.startsWith('hl-') && !id.startsWith('route-src-') && !id.startsWith('vrp-') &&
+           !id.startsWith('iso-') && !id.startsWith('fac-') && !id.startsWith('search-hl');
   });
   if (!valid.length) {
     _clearFeatureHighlight();
@@ -410,23 +407,23 @@ function _resetInfoPanelPosition() {
  * later if this function is called again, preventing stacked listeners.
  */
 function _setupDraggablePanel() {
-  const panel  = document.getElementById('feature-info-panel');
-  const header = document.querySelector('.feature-info-header');
-  if (!panel || !header) return;
+    const panel  = document.getElementById('feature-info-panel');
+    const header = document.querySelector('.feature-info-header');
+    if (!panel || !header) return;
 
-  // Remove stacked listeners from previous activations
-  if (panel._dragStart) {
-    header.removeEventListener('mousedown',  panel._dragStart);
-    document.removeEventListener('mousemove', panel._drag);
-    document.removeEventListener('mouseup',   panel._dragEnd);
-  }
+    // Remove stacked listeners from previous activations
+    if (panel._dragStart) {
+        header.removeEventListener('mousedown',  panel._dragStart);
+        document.removeEventListener('mousemove', panel._drag);
+        document.removeEventListener('mouseup',   panel._dragEnd);
+    }
 
-  let dragging = false;
-  let ox = 0, oy = 0;
-  /**
-   * Start dragging
-   * @param {Event} e - Mouse or touch event
-   */
+    let dragging = false;
+    let ox = 0, oy = 0;
+    /**
+     * Start dragging
+     * @param {Event} e - Mouse or touch event
+     */
   const dragStart = e => {
     if (e.target.closest('.close-btn')) return;
     dragging = true;
@@ -472,7 +469,8 @@ let searchPopup      = null;
 
 // Toggle the search panel open/closed
 window.toggleSearchPanel = function() {
-  document.getElementById('search-section').classList.toggle('open');
+  const section = document.getElementById('search-section');
+  section.classList.toggle('open');
 };
 
 // Search → called by button click or Enter key
@@ -481,27 +479,19 @@ window.searchUnits = async function() {
   const resultsEl = document.getElementById('results');
 
   if (!q) { resultsEl.innerHTML = ''; resultsEl.classList.remove('has-results'); return; }
- 
 
   resultsEl.innerHTML = '<div class="search-loading">Searching…</div>';
   resultsEl.classList.add('has-results');
   _openSearchPanel();
   _searchClearHighlight();
 
-  const index  = currentDataset === 'spl_units' ? 'building_unit' : 'building_vertical';
+  const index  = currentDataset === 'spl_units' ? 'building_units' : 'buildings_vertical';
   const fields = currentDataset === 'spl_units'
-    ? ['properties.UNIT_ID', 'properties.NAME', 'properties.NAME_LONG', 'properties.UnitAddres^3', 'properties.LabelNames']
-    : ['properties.UnitVerticalAddress^3', 'properties.ShortAddress^1.8'];
+    ? ['properties.UNIT_ID', 'properties.NAME^2', 'properties.NAME_LONG', 'properties.UnitAddres', 'properties.LabelNames']
+    : ['properties.UnitVerticalAddress^3', 'properties.fkShortAddress^1.8'];
 
   const esQuery = {
-    query: {
-        multi_match: { 
-            query: q, 
-            fields, 
-            type: 'best_fields', 
-            fuzziness: 'AUTO' 
-      } 
-    },
+    query: { multi_match: { query: q, fields, type: 'best_fields', fuzziness: 'AUTO' } },
     size: 20
   };
 
@@ -513,15 +503,15 @@ window.searchUnits = async function() {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    console.log(data.hits.hits.length)
     resultsEl.innerHTML = '';
 
-    if (data.hits.hits.length === 0) {
+    const hits = data.hits?.hits || [];
+    if (hits.length === 0) {
       resultsEl.innerHTML = '<div class="search-no-results">No results found</div>';
       return;
     }
 
-    data.hits.hits.forEach(hit => {
+    hits.forEach(hit => {
       const feat  = hit._source;
       const props = feat.properties || {};
       const item  = document.createElement('div');
@@ -1114,9 +1104,7 @@ async function _runVRP() {
     const summaryRow = document.createElement('div');
     summaryRow.className = 'legend-item';
     summaryRow.innerHTML = `
-      <div class="legend-label" 
-        style="font-weight:600">${isTSP ? "TSP" : "VRP"} · ${vrpState.stops.length} stops
-      </div>
+      <div class="legend-label" style="font-weight:600">${isTSP ? 'TSP' : 'VRP'} · ${vrpState.stops.length} stops</div>
       <div class="legend-stat">${km} km · ${mins} min</div>`;
     legendEl.appendChild(summaryRow);
 
@@ -1162,16 +1150,10 @@ async function _runVRP() {
 function _makeLegendDot(color, label) {
   const dot = document.createElement('span');
   dot.style.cssText = `
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:16px;
-    height:16px;
-    border-radius:50%;
-    background:${color};
-    font-size:8px;color:#fff;
-    font-weight:700;
-    font-family:var(--font-mono)`;
+    display:inline-flex;align-items:center;justify-content:center;
+    width:16px;height:16px;border-radius:50%;
+    background:${color};font-size:8px;color:#fff;
+    font-weight:700;font-family:var(--font-mono)`;
   dot.textContent = label;
   return dot;
 }
@@ -1266,7 +1248,9 @@ async function isoHandleClick(lngLat) {
     if (isoState.originMarker) isoState.originMarker.remove();
     const el = _makeStopEl('◉', '#3b9eff');
     el.style.fontSize = '11px';
-    isoState.originMarker = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+    isoState.originMarker = new maplibregl.Marker({ element: el })
+      .setLngLat(lngLat)
+      .addTo(map);
     isoState.originLngLat = lngLat;
   }
 
@@ -1309,9 +1293,7 @@ async function isoHandleClick(lngLat) {
       const item  = document.createElement('div');
       item.className = 'legend-item';
       item.innerHTML = `
-        <div class="legend-swatch" 
-          style="background:${color};height:3px;border-radius:1px">
-        </div>
+        <div class="legend-swatch" style="background:${color};height:3px;border-radius:1px"></div>
         <div class="legend-label">${t} min</div>`;
       legendEl.appendChild(item);
     }
@@ -1350,28 +1332,10 @@ function _isoRemoveLayers() {
 
 
 // =============================================================================
-// SECTION F: NEAREST FACILITY  (PostGIS spatial query + Valhalla routing)
-// =============================================================================
-//
-// FLASH-FREE RENDERING  ← key fix over the Overpass version
-// ──────────────────────────────────────────────────────────
-// The old code called _removeFacilityRouteLayers() then re-added the source
-// and layer on every search, causing a visible flash: for one frame the map
-// had no route lines, then they popped back in.
-//
-// Fix: _renderFacilityRoutes() now calls source.setData() when the source
-// already exists (same session), never removing and re-adding the layer.
-// The layer is only torn down fully on a style switch or explicit clear.
-//
-// STALE-REQUEST GUARD
-// ───────────────────
-// facilitySearchId increments on every click.  Each in-flight fetch captures
-// its own copy.  If the user clicks elsewhere before the response arrives,
-// the IDs won't match and the stale result is silently discarded.
+// SECTION C: NEAREST FACILITY (Overpass → Valhalla)
 // =============================================================================
 
-let facilityType     = 'hospital';
-let facilitySearchId = 0;          // stale-request guard counter
+let facilityType = 'hospital';
 
 const facilityState = {
   originMarker:  null,
@@ -1383,7 +1347,6 @@ const facilityState = {
 
 const FAC_ROUTE_SRC = 'fac-routes';
 const FAC_ROUTE_LYR = 'fac-routes-lyr';
-const FAC_ROUTE_GLOW = 'fac-routes-glow';   // soft halo beneath the line
 
 window.facilitySetType = btn => {
   document.querySelectorAll('#facility-type-seg .seg').forEach(b => b.classList.remove('active'));
@@ -1405,17 +1368,10 @@ window.facilityClear = () => {
 
 function facilityFullClear() {
   exitMode();
-  facilitySearchId++;   // invalidate any in-flight request
-  if (facilityState.originMarker) {
-    facilityState.originMarker.remove();
-    facilityState.originMarker = null;
-  }
-  facilityState.facMarkers.forEach(m => {
-    if (m._popup?.isOpen()) m._popup.remove();
-    m.remove();
-  });
-  facilityState.facMarkers    = [];
-  facilityState.originLngLat  = null;
+  if (facilityState.originMarker) { facilityState.originMarker.remove(); facilityState.originMarker = null; }
+  facilityState.facMarkers.forEach(m => { if (m._popup?.isOpen()) m._popup.remove(); m.remove(); });
+  facilityState.facMarkers   = [];
+  facilityState.originLngLat = null;
   facilityState.routeFeatures = [];
   facilityState.facilityType  = 'hospital';
   _removeFacilityRouteLayers();
@@ -1426,31 +1382,26 @@ function facilityFullClear() {
 }
 
 function _removeFacilityRouteLayers() {
-  if (map.getLayer(FAC_ROUTE_GLOW)) map.removeLayer(FAC_ROUTE_GLOW);
-  if (map.getLayer(FAC_ROUTE_LYR))  map.removeLayer(FAC_ROUTE_LYR);
+  if (map.getLayer(FAC_ROUTE_LYR)) map.removeLayer(FAC_ROUTE_LYR);
   if (map.getSource(FAC_ROUTE_SRC)) map.removeSource(FAC_ROUTE_SRC);
 }
 
 function facilityHandleClick(lngLat) {
-  // Replace origin pin; clear previous markers and legend
-  facilityState.facMarkers.forEach(m => {
-    if (m._popup?.isOpen()) m._popup.remove();
-    m.remove();
-  });
+  // Clear previous search except origin marker (we replace it)
+  facilityState.facMarkers.forEach(m => { if (m._popup?.isOpen()) m._popup.remove(); m.remove(); });
   facilityState.facMarkers = [];
+  _removeFacilityRouteLayers();
+  facilityState.routeFeatures = [];
   document.getElementById('fac-legend').classList.add('hidden');
-  document.getElementById('fac-legend').innerHTML = '';
-  document.getElementById('fac-status').textContent = '';
 
-  // DO NOT remove route layers here — we will update them in-place via
-  // setData() to avoid the flash.  They get torn down only on full clear
-  // or a style switch (where _restoreActiveLayers rebuilds from state).
-
+  // Place origin marker
   if (facilityState.originMarker) facilityState.originMarker.remove();
-  const pinEl = document.createElement('div');
-  pinEl.style.cssText = 'font-size:22px;line-height:1;cursor:default;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.6))';
-  pinEl.textContent   = '📍';
-  facilityState.originMarker = new maplibregl.Marker({ element: pinEl })
+  const el = _makeStopEl('📍', '#e2e8f0');
+  el.style.background = 'transparent';
+  el.style.border     = 'none';
+  el.style.fontSize   = '20px';
+  el.style.filter     = 'drop-shadow(0 2px 4px rgba(0,0,0,0.6))';
+  facilityState.originMarker = new maplibregl.Marker({ element: el })
     .setLngLat(lngLat).addTo(map);
   facilityState.originLngLat = lngLat;
   facilityState.facilityType = facilityType;
@@ -1461,263 +1412,195 @@ function facilityHandleClick(lngLat) {
 }
 
 async function _runFacilitySearch(lngLat, ftype) {
-  // Capture a unique ID for THIS search; discard response if superseded
-  const myId    = ++facilitySearchId;
-  const cfg     = FACILITY_CONFIG[ftype] || FACILITY_CONFIG['hospital'];
+  const cfg     = FACILITY_CONFIG[ftype] || FACILITY_CONFIG.hospital;
   const count   = parseInt(document.getElementById('fac-count').value, 10)  || 5;
   const radiusKm = parseInt(document.getElementById('fac-radius').value, 10) || 5;
+  const radiusM  = radiusKm * 1000;
 
-  setStatus(`Searching POI for ${cfg.label}s within ${radiusKm} km…`, 'loading');
+  setStatus(`Searching Overpass for ${cfg.label}s within ${radiusKm} km…`, 'loading');
+  document.getElementById('fac-status').textContent = '';
 
-  // ------------------------------------------------------------------
-  // Call /nearest_facility  (PostGIS + Valhalla matrix + route geometry)
-  // ------------------------------------------------------------------
-  let data;
+  // Query Overpass for the amenity type within radius
+  const overpassQuery = `
+    [out:json][timeout:25];
+    (
+      node["amenity"="${cfg.amenity}"](around:${radiusM},${lngLat[1]},${lngLat[0]});
+      way["amenity"="${cfg.amenity}"](around:${radiusM},${lngLat[1]},${lngLat[0]});
+    );
+    out center ${count * 3};
+  `;
+
+  let facilities = [];
   try {
-    const params = new URLSearchParams({
-      lon:             lngLat[0],
-      lat:             lngLat[1],
-      type:            ftype,
-      limit:           count,
-      max_distance_km: radiusKm,
-      routes:          'true',
+    const res  = await fetch(OVERPASS, {
+      method: 'POST',
+      body:   'data=' + encodeURIComponent(overpassQuery)
     });
+    if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
+    const data = await res.json();
 
-    const res = await fetch(`${API.nearestFacility}?${params}`, {
-      signal: AbortSignal.timeout(120_000)
-    });
+    // Parse Overpass elements into {name, lat, lon}
+    facilities = data.elements.map(el => {
+      const lat = el.lat ?? el.center?.lat;
+      const lon = el.lon ?? el.center?.lon;
+      const name = el.tags?.name || el.tags?.['name:en'] || cfg.label;
+      return { lat, lon, name };
+    }).filter(f => f.lat && f.lon);
 
-    if (myId !== facilitySearchId) return;   // superseded — discard
-
-    if (!res.ok) {
-      let detail = `HTTP ${res.status}`;
-      try { const j = await res.json(); detail = j.detail || detail; } catch {}
-      throw new Error(detail);
+    if (!facilities.length) {
+      setStatus(`No ${cfg.label}s found within ${radiusKm} km.`, 'warn');
+      return;
     }
 
-    console.log('%c Facility API Data:', 'color: #22d98a; font-weight: bold;', res);
-    console.table(res.facilities);   // Nice table view of facilities
+    // Sort by straight-line distance, take top N
+    facilities = facilities.map(f => ({
+      ...f,
+      dist: _haversineKm(lngLat[1], lngLat[0], f.lat, f.lon)
+    })).sort((a, b) => a.dist - b.dist).slice(0, count);
 
-    data = await res.json();
+    setStatus(`Found ${facilities.length} ${cfg.label}(s). Routing…`, 'loading');
 
-    console.log('%c Facility API Data:', 'color: #22d98a; font-weight: bold;', data);
-    console.table(data.facilities);   // Nice table view of facilities
-    // =======================================================
   } catch (err) {
-    if (myId !== facilitySearchId) return;
-    setStatus(`Error: ${err.message}`, 'error');
+    setStatus(`Overpass error: ${err.message}`, 'error');
     return;
   }
 
-  if (myId !== facilitySearchId) return;   // superseded after await
+  // Route from origin to each facility (parallel)
+  const routeResults = await Promise.allSettled(
+    facilities.map(f =>
+      fetchJSON(API.route, {
+        locations: [
+          { lat: lngLat[1], lon: lngLat[0] },
+          { lat: f.lat,     lon: f.lon      }
+        ],
+        costing: 'auto',
+        directions_options: { language: 'en-US' }
+      }).then(r => ({ facility: f, trip: r.trip }))
+    )
+  );
 
-  if (!data.facilities || data.facilities.length === 0) {
-    setStatus(`No ${cfg.label} found within ${radiusKm} km.`, 'warn');
-    _renderFacilityRoutes([], ftype);        // clear route lines without flash
-    return;
-  }
-
-  const facilities = data.facilities;
-
-  // ------------------------------------------------------------------
-  // Collect all route segments into a flat GeoJSON feature array.
-  // Each feature already carries facility_rank from the API so the
-  // line-width expression can vary by proximity.
-  // ------------------------------------------------------------------
+  // Draw results
   const allFeatures = [];
-  // facilities.forEach((f, index) => {
-  //   (f.route?.features ?? []).forEach(feat => {
-  //     allFeatures.push({
-  //       ...feat,
-  //       properties: {
-  //         ...feat.properties,
-  //         facility_rank: index + 1,
-  //       },
-  //     });
-  //   });
-  // });
+  const results     = [];
 
-  // ---------New code---------
-  facilities.forEach((f, index) => {
-    (f.route?.features ?? []).forEach(feat => {
-      const rawCoords = feat.geometry?.coordinates;
+  routeResults.forEach((res, i) => {
+    if (res.status !== 'fulfilled' || !res.value.trip) return;
+    const { facility, trip } = res.value;
+    const coords = trip.legs.flatMap(leg => decodePolyline6(leg.shape));
+    const km     = trip.summary.length.toFixed(1);
+    const mins   = Math.round(trip.summary.time / 60);
 
-      // Decode if string (encoded polyline), use as-is if already an array
-      let coords;
-      if (typeof rawCoords === 'string' && rawCoords.length > 0) {
-        coords = decodePolyline6(rawCoords);
-      } else if (Array.isArray(rawCoords) && rawCoords.length >= 2) {
-        coords = rawCoords;
-      } else {
-        return;   // skip malformed feature
-      }
-
-      if (coords.length < 2) return;   // degenerate segment — skip
-
-      allFeatures.push({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: coords },
-        properties: {
-          ...feat.properties,
-          facility_rank: index + 1,
-        },
-      });
+    allFeatures.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: coords },
+      properties: { rank: i + 1, km, mins, name: facility.name }
     });
+
+    results.push({ ...facility, km, mins, rank: i + 1 });
   });
 
-  // Store for style-switch restore
+  if (!results.length) {
+    setStatus('Could not route to any facilities.', 'warn');
+    return;
+  }
+
+  // Save for style restores
   facilityState.routeFeatures = allFeatures;
 
-  // ------------------------------------------------------------------
-  // Draw route lines — setData() path avoids the flash
-  // ------------------------------------------------------------------
+  // Draw route lines
   _renderFacilityRoutes(allFeatures, ftype);
 
-  // ------------------------------------------------------------------
-  // Place facility markers
-  // ------------------------------------------------------------------
-  facilityState.facMarkers.forEach(m => { if (m._popup?.isOpen()) m._popup.remove(); m.remove(); });
-  facilityState.facMarkers = [];
-
-  facilities.forEach((f, index) => {
-    const icon  = cfg.icon;
-    const color = cfg.color;
-    const rank  = index + 1;
-
+  // Draw facility markers
+  results.forEach((f, i) => {
     const el = document.createElement('div');
     el.className = 'fac-marker';
-    el.style.background = color;
-    el.innerHTML = icon;
+    el.style.background = cfg.color;
+    el.innerHTML = cfg.icon;
 
     const badge = document.createElement('div');
     badge.className = 'fac-badge';
-    badge.style.borderColor = color;
-    badge.style.color       = color;
-    badge.textContent       = rank;
+    badge.style.borderColor = cfg.color;
+    badge.style.color       = cfg.color;
+    badge.textContent       = i + 1;
     el.appendChild(badge);
 
-    const popup = new maplibregl.Popup({
-      offset: 20, closeButton: true, maxWidth: '240px'
-    }).setHTML(`
-      <div style="font-size:12px;line-height:1.6;color:var(--text)">
-        <div style="font-size:20px;margin-bottom:4px">${icon}</div>
-        <strong style="color:var(--text)">${f.name}</strong>
-        ${f.address ? `<br><span style="color:var(--text-dim)">${f.address}</span>` : ''}
-        <br><span style="color:#22d98a">⏱ ${f.travel_minutes} min</span>
-        &nbsp;·&nbsp;<span style="color:var(--text-dim)">${f.crow_distance_km} km</span><br>
-        <small style="color:var(--text-faint)">Rank #${rank}</small>
-      </div>
-    `);
+    const popup = new maplibregl.Popup({ offset: 20, closeButton: true, maxWidth: '220px' })
+      .setHTML(`<div style="font-size:12px;line-height:1.6;color:var(--text)">
+        <div style="font-size:20px;margin-bottom:4px">${cfg.icon}</div>
+        <strong style="color:var(--text)">${f.name}</strong><br>
+        <span style="color:#22d98a">⏱ ${f.mins} min</span>
+        &nbsp;·&nbsp;<span style="color:var(--text-dim)">${f.km} km</span><br>
+        <small style="color:var(--text-faint)">Rank #${f.rank} · ${f.dist.toFixed(1)} km straight-line</small>
+      </div>`);
 
-    const marker = new maplibregl.Marker({
-      element: el, anchor: 'center', offset: [0, -4]
-    })
-      .setLngLat([parseFloat(f.facility_lon), parseFloat(f.facility_lat)])
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center', offset: [0, -4] })
+      .setLngLat([f.lon, f.lat])
       .setPopup(popup)
       .addTo(map);
 
     marker._popup = popup;
-
-    let closeTimeout;
-    el.addEventListener('mouseenter', () => {
-      clearTimeout(closeTimeout);
-      if (!popup.isOpen()) marker.togglePopup();
-    });
-    el.addEventListener('mouseleave', () => {
-      closeTimeout = setTimeout(() => { if (popup.isOpen()) marker.togglePopup(); }, 200);
-    });
+    el.addEventListener('mouseenter', () => { if (!popup.isOpen()) marker.togglePopup(); });
+    el.addEventListener('mouseleave', () => { setTimeout(() => { if (popup.isOpen()) marker.togglePopup(); }, 200); });
 
     facilityState.facMarkers.push(marker);
   });
 
-  // ------------------------------------------------------------------
-  // Build sidebar legend
-  // ------------------------------------------------------------------
+  // Build legend
   const legendEl = document.getElementById('fac-legend');
   legendEl.innerHTML = '';
-  facilities.forEach((f, i) => {
+  results.forEach((f, i) => {
     const item = document.createElement('div');
     item.className = 'fac-item';
     item.onclick   = () => facilityState.facMarkers[i]?.togglePopup();
     item.innerHTML = `
-      <div class="fac-rank" style="background:${cfg.color}">${i + 1}</div>
+      <div class="fac-rank" style="background:${cfg.color}">${f.rank}</div>
       <div class="fac-info">
         <div class="fac-name">${f.name}</div>
-        <div class="fac-meta">⏱ ${f.travel_minutes} min · ${f.crow_distance_km} km straight-line</div>
+        <div class="fac-meta">⏱ ${f.mins} min · ${f.km} km driving · ${f.dist.toFixed(1)} km straight</div>
       </div>`;
     legendEl.appendChild(item);
   });
   legendEl.classList.remove('hidden');
 
-  // ------------------------------------------------------------------
-  // Zoom to fit all results + origin
-  // ------------------------------------------------------------------
+  // Zoom to fit all
   const bounds = new maplibregl.LngLatBounds();
   bounds.extend(lngLat);
-  facilities.forEach(f => bounds.extend([parseFloat(f.facility_lon), parseFloat(f.facility_lat)]));
-  const sidebarW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) + 20;
+  results.forEach(f => bounds.extend([f.lon, f.lat]));
   map.fitBounds(bounds, {
-    padding: { top: 80, bottom: 80, left: sidebarW, right: 80 },
+    padding: { top: 80, bottom: 80, left: parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w')) + 20, right: 80 },
     maxZoom: 14, duration: 1200
   });
 
-  const closest = facilities[0];
-  setStatus(`✅ ${facilities.length} ${cfg.label}(s) found — nearest is ${closest.name} (${closest.travel_minutes} min)`, 'success');
-  document.getElementById('fac-status').textContent =
-    `${facilities.length} result${facilities.length > 1 ? 's' : ''} — hover markers for details`;
+  const closest = results[0];
+  setStatus(`✅ ${results.length} ${cfg.label}(s) found — nearest is ${closest.name} (${closest.mins} min)`, 'success');
+  document.getElementById('fac-status').textContent = `${results.length} result${results.length > 1 ? 's' : ''} — click to see details`;
 }
-// ------------------------------------------------------------------
-// Render route lines
 
-//
-// If the source does NOT yet exist (first draw, or after a style switch
-// cleared it), we create the source + both layers fresh.
-// ------------------------------------------------------------------
 function _renderFacilityRoutes(features, ftype) {
-  const cfg   = FACILITY_CONFIG[ftype] || FACILITY_CONFIG['hospital'];
-  const color = cfg.color;
-  const geojsonData = { type: 'FeatureCollection', features };
-
-  if (map.getSource(FAC_ROUTE_SRC)) {
-    // Source already exists — update data AND repaint both layers so a
-    // facility-type change (e.g. hospital → police) recolors the lines.
-    map.getSource(FAC_ROUTE_SRC).setData(geojsonData);
-    if (map.getLayer(FAC_ROUTE_GLOW)) map.setPaintProperty(FAC_ROUTE_GLOW, 'line-color', color);
-    if (map.getLayer(FAC_ROUTE_LYR))  map.setPaintProperty(FAC_ROUTE_LYR,  'line-color', color);
-    return;
-  }
-
-  // First draw or post-style-switch: create source + layers from scratch
-  map.addSource(FAC_ROUTE_SRC, { type: 'geojson', data: geojsonData });
-
-  // Glow layer — wide, semi-transparent halo for visual depth
-  map.addLayer({
-    id:     FAC_ROUTE_GLOW,
-    type:   'line',
-    source: FAC_ROUTE_SRC,
-    layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: {
-      'line-color':   color,
-      'line-width':   ['interpolate', ['linear'], ['get', 'facility_rank'], 1, 14, 5, 8],
-      'line-opacity': 0.15,
-      'line-blur':    6,
-    },
+  _removeFacilityRouteLayers();
+  const cfg = FACILITY_CONFIG[ftype] || FACILITY_CONFIG.hospital;
+  map.addSource(FAC_ROUTE_SRC, {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features }
   });
-
-  // Crisp route line — narrower for lower-ranked (farther) facilities
   map.addLayer({
-    id:     FAC_ROUTE_LYR,
-    type:   'line',
-    source: FAC_ROUTE_SRC,
+    id: FAC_ROUTE_LYR, type: 'line', source: FAC_ROUTE_SRC,
     layout: { 'line-join': 'round', 'line-cap': 'round' },
     paint: {
-      'line-color':   color,
-      'line-width':   ['interpolate', ['linear'], ['get', 'facility_rank'], 1, 5.5, 5, 2.5],
-      'line-opacity': 0.85,
-    },
+      'line-color': cfg.color,
+      'line-width': ['interpolate', ['linear'], ['get', 'rank'], 1, 5, 5, 2.5],
+      'line-opacity': 0.8
+    }
   });
 }
 
+function _haversineKm(lat1, lon1, lat2, lon2) {
+  const R  = 6371;
+  const dL = (lat2 - lat1) * Math.PI / 180;
+  const dO = (lon2 - lon1) * Math.PI / 180;
+  const a  = Math.sin(dL/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dO/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
 
 // ===========================================================================
 // LAYER SWITCHER CONTROL
