@@ -3,7 +3,7 @@ listen_addresses: '0.0.0.0:3000'
 base_path: 
 worker_processes: 8
 cache_size_mb: 1024
-preferred_encoding: gzip
+preferred_encoding: brotli
 web_ui: enable-for-all
 observability:
   metrics:
@@ -30,6 +30,7 @@ postgres:
 pmtiles:
   directory_cache_size_mb: 128
   allow_http: true
+  convert_to_mlt: auto
   paths:
   - /pmtiles
 

@@ -14,44 +14,13 @@
 
   <div id="map"></div>
 
-  <!-- Feature Info Panel (info pointer mode) -->
-  <div id="feature-info-panel" class="feature-info-panel hidden">
-    <div class="feature-info-header">
-      <h3>Feature Information</h3>
-      <button id="close-feature-info" class="close-btn">✕</button>
-    </div>
-    <div id="feature-info-content" class="feature-info-content">
-        <p class="info-hint">Click on any feature to see details</p>
-    </div>
-  </div>
-
   <!-- ── Sidebar ─────────────────────────────────────────── -->
   <nav id="sidebar">
 
-    <!-- ── Search Section (top, slides sidebar down when results appear) ── -->
-    <div id="search-section" class="search-section">
-      <div class="search-header" id="search-toggle" onclick="toggleSearchPanel()">
-        <span>🔍 Search Buildings</span>
-        <span id="search-chevron" class="search-chevron">▾</span>
-      </div>
-      <div id="search-body" class="search-body">
-        <div class="dataset-selector">
-          <label><input type="radio" name="dataset" value="spl_units" checked> SPL Units</label>
-          <label><input type="radio" name="dataset" value="va_samples"> Vertical Addresses</label>
-        </div>
-        <div class="search-bar">
-          <input type="text" id="searchInput" placeholder="Unit ID, Name, Address..." onkeypress="if(event.key==='Enter') searchUnits()" />
-          <button onclick="searchUnits()">Search</button>
-        </div>
-        <div id="results" class="results-list"></div>
-      </div>
-    </div>
-
-    <!-- Brand -->
     <div id="brand">
       <span class="brand-icon">◈</span>
       <div>
-        <div class="brand-title">Searching and GeoRouting</div>
+        <div class="brand-title">GeoRouting Lab</div>
         <div class="brand-sub">Valhalla · VROOM</div>
       </div>
     </div>
@@ -61,7 +30,6 @@
       <button class="tab active" data-tab="route"     onclick="switchTab('route')">Route</button>
       <button class="tab"        data-tab="vrp"       onclick="switchTab('vrp')">VRP / TSP</button>
       <button class="tab"        data-tab="isochrone" onclick="switchTab('isochrone')">Isochrone</button>
-      <button class="tab"        data-tab="facility"  onclick="switchTab('facility')">Facility</button>
     </div>
 
     <!-- ══════════════════════════════════════════════════════
@@ -83,17 +51,8 @@
 
       <!-- Click status -->
       <div id="route-pick-status" class="pick-status">
-        <div class="pick-row">
-          <span id="route-s-dot" class="dot dot-start"></span>
-          <span id="route-s-label">Start — click map</span>
-        </div>
-        <div class="pick-swap-row">
-          <button class="btn-swap" onclick="routeSwapPoints()" title="Swap start ↔ end">⇅</button>
-        </div>
-        <div class="pick-row">
-          <span id="route-e-dot" class="dot dot-end"></span>
-          <span id="route-e-label">End — click map</span>
-        </div>
+        <div><span id="route-s-dot" class="dot dot-start"></span><span id="route-s-label">Start — click map</span></div>
+        <div><span id="route-e-dot" class="dot dot-end"></span><span id="route-e-label">End — click map</span></div>
       </div>
 
       <div class="btn-row">
@@ -180,45 +139,6 @@
       </div>
 
       <div id="iso-legend" class="legend hidden"></div>
-
-    </div>
-
-    <!-- ══════════════════════════════════════════════════════
-         TAB 4 — NEAREST FACILITY
-    ══════════════════════════════════════════════════════ -->
-    <div id="tab-facility" class="tab-panel">
-
-      <p class="instruction">Select a facility type, set a search radius, then click a location on the map to find the nearest facilities with driving routes.</p>
-
-      <div class="field-row">
-        <label>Facility Type</label>
-        <div class="seg-group" id="facility-type-seg">
-          <button class="seg active" data-ftype="hospital"     onclick="facilitySetType(this)">🏥 Hospital</button>
-          <button class="seg"        data-ftype="fire station" onclick="facilitySetType(this)">🚒 Fire Stn</button>
-          <button class="seg"        data-ftype="police"       onclick="facilitySetType(this)">👮 Police</button>
-          <button class="seg"        data-ftype="clinic"     onclick="facilitySetType(this)">💊 Clinic</button>
-        </div>
-      </div>
-
-      <div class="field-row">
-        <label>Max Results <span class="mono-val" id="fac-count-val">5</span></label>
-        <input type="range" id="fac-count" min="1" max="10" value="5"
-               oninput="document.getElementById('fac-count-val').textContent=this.value">
-      </div>
-
-      <div class="field-row">
-        <label>Search Radius <span class="mono-val" id="fac-radius-val">5 km</span></label>
-        <input type="range" id="fac-radius" min="1" max="20" value="5"
-               oninput="document.getElementById('fac-radius-val').textContent=this.value+' km'">
-      </div>
-
-      <div class="btn-row">
-        <button class="btn-action" id="fac-pick-btn" onclick="facilityActivate()">📍 Pick Location</button>
-        <button class="btn-ghost"  onclick="facilityClear()">✕ Clear</button>
-      </div>
-
-      <div id="fac-status" class="mono-stat"></div>
-      <div id="fac-legend" class="legend hidden"></div>
 
     </div>
 
