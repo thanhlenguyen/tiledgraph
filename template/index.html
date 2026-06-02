@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>KSA Route & Service Analysis</title>
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         EXTERNAL DEPENDENCIES
+         To swap map library: replace MapLibre with Leaflet/OpenLayers here
+         and update js/scripts.js SECTION 2 (Map Init) accordingly.
+    ═══════════════════════════════════════════════════════════════ -->
+    <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
+    <link  href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+    <!-- Font — swap here to change typeface throughout the app -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         STYLESHEET
+         Themes live in css/styles.css.
+         To switch to the dark sidebar layout: replace styles.css with
+         styles-dark.css (or rename the :root variables block inside it).
+         The HTML structure below does NOT need to change for a theme swap.
+    ═══════════════════════════════════════════════════════════════ -->
+    <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     ROOT CONTAINER
+     The map fills the full viewport. All UI panels are absolutely
+     positioned children of #map so they float over the map canvas.
+
+     LAYOUT VARIANTS:
+       Current  → "floating panels" layout (panels sit ON the map)
+       Alt A    → "sidebar" layout: move #control-panel and #search-panel
+                  outside #map, set sidebar width via CSS, shrink #map left.
+       Alt B    → "bottom sheet" on mobile: CSS media query moves panels
+                  to fixed bottom position.
+═══════════════════════════════════════════════════════════════════ -->
+<div id="map">
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         BLOCK 1: MAIN CONTROL PANEL
+         Role    : Mode switcher + per-mode controls (sliders, dropdowns)
+         Position: top-center, floats over the map
+         Toggle  : .panel-minimised class collapses it to a pill
+         
+         To move to a sidebar:
+           1. Move this <div> outside of #map.
+           2. In styles.css change .control-panel.header → position:static
+              and give #sidebar a fixed width.
+           3. Remove the translateX(-50%) centering rule.
+    ═══════════════════════════════════════════════════════════════ -->
+    <div class="control-panel header panel-minimised">
+
+        <!-- Compact pill label visible only when panel is minimised -->
+        <span class="panel-minimised-label">🗺️ Routing &amp; Services</span>
+
+        <!-- Expanded panel content -->
+        <div class="header-content">
+
+            <h1 class="title">Routing and Services Analysis Tool</h1>
+
+            <!-- ── Mode buttons ─────────────────────────────────────────
+                 Add/remove modes here and mirror in SECTION 7 (switchMode)
+                 of scripts.js. Each button ID must be "mode-{modeName}".
+            ─────────────────────────────────────────────────────────── -->
+            <div class="mode-switcher">
+                <button id="mode-route"    class="mode-btn active" type="button">🗺️ A→B Route</button>
+                <button id="mode-tsp"      class="mode-btn"        type="button">🔄 TSP Multi</button>
+                <button id="mode-facility" class="mode-btn"        type="button">🏥 Nearest Facility</button>
+                <button id="mode-service"  class="mode-btn"        type="button">🚚 Service Area</button>
+            </div>
+
+            <!-- ── Route mode controls (hidden in other modes) ──────────
+                 SWAP: replace Fastest/Shortest with Valhalla costing options
+                 by changing the button values and updating calculateRoute()
+                 in SECTION 8 of scripts.js.
+            ─────────────────────────────────────────────────────────── -->
+            <div id="route-options" class="mode-specific-controls">
+                <label class="route-option-label">Route Optimization:</label>
+                <div class="route-option-buttons">
+                    <button id="opt-fastest"  class="route-opt-btn active" type="button">⚡ Fastest</button>
+                    <button id="opt-shortest" class="route-opt-btn"        type="button">📏 Shortest</button>
+                </div>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="show-alternatives" checked />
+                    Show 3 alternative routes
+                </label>
+            </div>
+
+            <!-- ── Facility mode: type selector ─────────────────────────
+                 SWAP: replace <select> with segmented buttons (see App 2
+                 index.html #facility-type-seg) for a more modern look.
+                 Values must match _ALLOWED_FACILITY_TYPES in app.py.
+            ─────────────────────────────────────────────────────────── -->
+            <div id="facility-selector" class="hidden mode-specific-controls">
+                <label for="facility-type-select">Facility Type:</label>
+                <select id="facility-type-select">
+                    <option value="hospital">Hospital</option>
+                    <option value="fire station">Fire Station</option>
+                    <option value="police">Police</option>
+                    <option value="clinic">Clinic</option>
+                </select>
+            </div>
+
+            <!-- ── Facility mode: sliders ────────────────────────────────
+                 Max values are controlled by MAX_FACILITY_COUNT and
+                 MAX_SEARCH_DISTANCE_KM in SECTION 1 of scripts.js.
+            ─────────────────────────────────────────────────────────── -->
+            <div id="facility-sliders-container" class="hidden mode-specific-controls">
+                <div class="sliders-row">
+                    <div class="slider-column">
+                        <label class="slider-label">
+                            Find: <span id="facility-count-value">5</span> facilities
+                        </label>
+                        <input type="range" id="facility-count-input"
+                               min="1" max="10" value="5" step="1" class="range-slider" />
+                    </div>
+                    <div class="slider-column">
+                        <label class="slider-label">
+                            Radius: <span id="distance-value">10</span> km
+                        </label>
+                        <input type="range" id="distance-input"
+                               min="1" max="30" value="10" step="1" class="range-slider" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Service area mode: time slider ───────────────────────
+                 Max value controlled by MAX_SERVICE_MINUTES in scripts.js.
+            ─────────────────────────────────────────────────────────── -->
+            <div id="time-slider" class="hidden mode-specific-controls">
+                <label class="slider-label">
+                    Service Time: <span id="time-value">5</span> min
+                </label>
+                <input type="range" id="time-input"
+                       min="1" max="15" value="5" step="1" class="range-slider" />
+            </div>
+
+        </div><!-- /header-content -->
+
+        <!-- Dynamic instruction text — updated by updateModeInstructions() -->
+        <p class="instruction" id="mode-instruction">
+            Click: <span class="highlight start">Start</span> →
+            <span class="highlight end">End</span>
+        </p>
+
+    </div><!-- /BLOCK 1: MAIN CONTROL PANEL -->
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         BLOCK 2: FEATURE INFO PANEL
+         Role    : Shows raw GeoJSON properties when Info Pointer is active
+         Position: fixed top-right, draggable via JS
+         Toggle  : .hidden class; toggled by toggleInfoPointer() in scripts.js
+
+         To remove this feature entirely:
+           1. Delete this block.
+           2. Remove SECTION 4 (Info Pointer) from scripts.js.
+           3. Remove the ℹ️ button injection from injectMapButtons().
+    ═══════════════════════════════════════════════════════════════ -->
+    <div id="feature-info-panel" class="control-panel feature-info-panel hidden">
+        <div class="feature-info-header">
+            <h3>Feature Information</h3>
+            <button id="close-feature-info" class="close-btn" type="button">✕</button>
+        </div>
+        <div id="feature-info-content" class="feature-info-content">
+            <p class="info-hint">Click on a feature to see details</p>
+        </div>
+    </div><!-- /BLOCK 2: FEATURE INFO PANEL -->
+
+
+    <!-- ═══════════════════════════════════════════════════════════════
+         BLOCK 3: SEARCH PANEL
+         Role    : Elasticsearch building/unit search + result list
+                   + the route info box (shared status display)
+         Position: top-left, floats over the map
+         
+         To replace Elasticsearch with a different search backend:
+           1. Keep this HTML unchanged.
+           2. Swap searchUnits() in SECTION 15 of scripts.js.
+           3. Update the ES_URL constant in SECTION 1 of scripts.js.
+
+         To move to a sidebar layout:
+           1. Move this <div> outside of #map as a sibling of #map.
+           2. Change .search-panel → position:static; width:100%.
+           3. Remove top/left positioning rules in styles.css.
+    ═══════════════════════════════════════════════════════════════ -->
+    <div id="search-control" class="maplibregl-ctrl maplibregl-ctrl-group search-panel">
+
+        <!-- Compact pill — only visible on mobile when panel is collapsed -->
+        <div class="search-panel-pill">
+            <span class="pill-icon">🔍</span>
+            <span>Search</span>
+        </div>
+
+        <!-- Dataset toggle — add more <label> entries to support more indices -->
+        <div class="dataset-selector">
+            <label><input type="radio" name="dataset" value="spl_units"  checked> SPL Units</label>
+            <label><input type="radio" name="dataset" value="va_samples"> Vertical Addresses</label>
+        </div>
+
+        <!-- Search input row -->
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search by ID, Name, Address..." />
+            <button onclick="searchUnits()">Search</button>
+        </div>
+
+        <!-- Result list — populated dynamically by searchUnits() -->
+        <div id="results" class="results-list"></div>
+
+        <!-- ── Shared info / status box ──────────────────────────────
+             showInfo() in scripts.js writes here.
+             Used by ALL modes (route summary, TSP result, facility list,
+             service area status, error messages).
+             To move this to a toast/snackbar: update showInfo() in
+             SECTION 13 of scripts.js.
+        ─────────────────────────────────────────────────────────── -->
+        <div id="info-box" class="info-panel hidden">
+            <p id="route-info" class="info-text">Click to start</p>
+        </div>
+
+    </div><!-- /BLOCK 3: SEARCH PANEL -->
+
+</div><!-- /ROOT CONTAINER #map -->
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SCRIPTS
+     scripts.js is the single JS entry point.
+     defer = runs after HTML is parsed; keeps the script out of <head>.
+     To split into modules: change to type="module" and use ES imports.
+═══════════════════════════════════════════════════════════════════ -->
+<script src="js/scripts.js" defer></script>
+
+</body>
+</html>

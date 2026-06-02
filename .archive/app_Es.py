@@ -518,7 +518,10 @@ async def nearest_facility(
             payload = {
                 "locations": [
                     _valhalla_location(lon, lat),
-                    _valhalla_location(facility["facility_lon"], facility["facility_lat"]),
+                    _valhalla_location(
+                        facility["facility_lon"], 
+                        facility["facility_lat"]
+                    ),
                 ],
                 "costing":      VALHALLA_COSTING,
                 "units":        "km",

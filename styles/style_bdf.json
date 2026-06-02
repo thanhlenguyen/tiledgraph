@@ -49,6 +49,12 @@
       "minzoom": 14,
       "maxzoom": 16
     },
+    "building_floors": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/building_floors/{z}/{x}/{y}"],
+      "minzoom": 14,
+      "maxzoom": 16
+    },
     "spl_vertical": {
       "type": "vector",
       "tiles": ["http://localhost:3000/spl_vertical_address/{z}/{x}/{y}"],
@@ -535,6 +541,39 @@
           "fill-extrusion-height": ["get", "rel_height"],
           "fill-extrusion-color": "#e8dcc5"
       }
+    },
+    {
+      "id": "Floors",
+      "type": "fill-extrusion",
+      "source": "building_floors",
+      "source-layer": "building_floor",
+      "minzoom": 14,
+      "layout": {"visibility": "visible"},      
+      "paint": {
+          "fill-extrusion-height": [
+              "*",
+              ["/",
+                ["get", "BuildingHeight"],
+                ["get", "FloorsAboveGround"]
+              ],
+              ["+", ["get", "FloorNumber"], 1]
+            ],
+          "fill-extrusion-base": [
+              "*",
+              ["/",
+                ["get", "BuildingHeight"],
+                ["get", "FloorsAboveGround"]
+              ],
+              ["get", "FloorNumber"]
+            ],
+          "fill-extrusion-opacity": 0.7,
+          "fill-extrusion-color": [
+              "case",
+              ["==", ["%", ["to-number", ["get", "FloorNumber"]], 2], 0],
+              "#FDEB9E",  
+              "#FFF7C5"   
+              ]
+          }
     },
     {
       "id": "address-label",

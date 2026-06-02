@@ -36,8 +36,8 @@
       </div>
       <div id="search-body" class="search-body">
         <div class="dataset-selector">
-          <label><input type="radio" name="dataset" value="spl_units" checked> SPL Units</label>
-          <label><input type="radio" name="dataset" value="va_samples"> Vertical Addresses</label>
+          <label><input type="radio" name="dataset" value="va_building" checked> Building Floors</label>
+          <label><input type="radio" name="dataset" value="spl_units"> SPL Units</label>
         </div>
         <div class="search-bar">
           <input type="text" id="searchInput" placeholder="Unit ID, Name, Address..." onkeypress="if(event.key==='Enter') searchUnits()" />
@@ -196,7 +196,6 @@
           <button class="seg active" data-ftype="hospital"     onclick="facilitySetType(this)">🏥 Hospital</button>
           <button class="seg"        data-ftype="fire station" onclick="facilitySetType(this)">🚒 Fire Stn</button>
           <button class="seg"        data-ftype="police"       onclick="facilitySetType(this)">👮 Police</button>
-          <button class="seg"        data-ftype="clinic"     onclick="facilitySetType(this)">💊 Clinic</button>
         </div>
       </div>
 

@@ -1,0 +1,80 @@
+async function zoomToFeature(feature, clickedElement) {
+    if (!state.map) {
+        console.warn('Map not ready');
+        return;
+    }
+
+    // Clear previous highlights and mark new selection
+    clearHighlight();
+    clickedElement.classList.add('active');
+
+    // Validate geometry
+    if (!feature.geometry) {
+        alert('No geometry available for this feature.');
+        return;
+    }
+
+    // Calculate feature bounds
+    const bounds = new maplibregl.LngLatBounds();
+    const props = feature.properties || {};
+    const flattenCoords = (arr) => {
+        if (typeof arr[0] === 'number') {
+            bounds.extend([arr[0], arr[1]]);
+        } else {
+            arr.forEach(flattenCoords);
+        }
+    };
+    flattenCoords(feature.geometry.coordinates);
+    
+    if (bounds.isEmpty()) {
+        alert('No valid geometry found.');
+        return;
+    }
+
+    // Calculate popup position
+    const popupPosition = getPopupAnchorPosition(bounds);
+
+    // Build the popup HTML with the feature's attributes
+    let popupHTML = `
+        <div style="max-width:280px;font-size:14px;line-height:1.6;">
+            <strong style="font-size:16px;color:#1f2937;">
+                ${props.NAME || props.FloorUsage || props.UnitAddress || 'Feature'}
+            </strong><br>
+    `;
+
+    if (currentDataset === 'spl_units') {
+        popupHTML += `
+            <strong>Unit ID:</strong> ${props.UNIT_ID || '—'}<br>
+            <strong>Address:</strong> ${props.UnitVerticalAddress || 'N/A'}<br>
+            <strong>Floor:</strong> ${props.Base !== undefined ? props.Base.toFixed(2) + 'm' : 'N/A'}<br>
+            <strong>Height:</strong> ${props.HEIGHT !== undefined ? props.HEIGHT.toFixed(2) + 'm' : 'N/A'}<br>
+            <strong>Type:</strong> ${props.USE_TYPE || 'N/A'}
+        `;
+    } else {
+        popupHTML += `
+            <strong>ID:</strong> ${props.fkFloorGUID || props.UnitVerticalAddress || '—'}<br>
+            <strong>Address:</strong> ${props.UnitVerticalAddress || props.fkShortAddress || 'N/A'}<br>
+            <strong>Floor:</strong> ${props.FloorID ?? '—'}<br>
+            <strong>Usage:</strong> ${props.UseType || '—'}<br>
+            <strong>Type:</strong> ${props.Occupant || '—'}<br>
+            <strong>Total Floors:</strong> ${props.NoofFloors || '—'}<br>
+            <strong>Building Height:</strong> ${props.BuildingHeight ? props.BuildingHeight.toFixed(1) + 'm' : '—'}
+        `;
+    }
+    popupHTML += '</div>';
+
+    // Function to add highlight and animate camera
+    const afterStyleLoad = () => {
+        addHighlightAndAnimate(feature, bounds, popupPosition, popupHTML);
+    };
+
+    // Switch to 3D BDF style if not already active
+    const bdfStyle = STYLES.find(s => s.id === 'bdf-style');
+    if (currentStyleId !== 'bdf-style') {
+        state.map.setStyle(bdfStyle.url);
+        currentStyleId = 'bdf-style';
+        state.map.once('idle', afterStyleLoad);
+    } else {
+        afterStyleLoad();
+    }
+}
