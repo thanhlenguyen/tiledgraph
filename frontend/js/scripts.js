@@ -25,10 +25,11 @@ const STYLES = [
 // ---------------------------------------------------------------------------
 const BACKEND_URL = '/api';  // Nginx proxies /api/ → routing-api:5000
 const API = {
-  route:          `${BACKEND_URL}/route`,
-  optimize:       `${BACKEND_URL}/optimize_route`,
-  isochrone:      `${BACKEND_URL}/isochrone`,
-  nearestFacility:`${BACKEND_URL}/nearest_facility`,   // PostGIS + Valhalla
+  route:             `${BACKEND_URL}/route`,
+  optimize:          `${BACKEND_URL}/optimize_route`,
+  isochrone:         `${BACKEND_URL}/isochrone`,
+  nearestFacilityPg: `${BACKEND_URL}/nearest_facility_pg`,   // PostGIS + Valhalla
+  nearestFacility:   `${BACKEND_URL}/nearest_facility`,   // Elastic Search + Valhalla
 };
 const TIMEOUT = 120000;
 const ES_URL = 'http://localhost:9200';
@@ -466,7 +467,7 @@ function _setupDraggablePanel() {
 // SECTION B: SEARCH (Elasticsearch)
 // =============================================================================
 
-let currentDataset   = 'spl_units';
+let currentDataset   = 'va_building';
 let searchHighlights = [];
 let searchPopup      = null;
 
@@ -488,10 +489,10 @@ window.searchUnits = async function() {
   _openSearchPanel();
   _searchClearHighlight();
 
-  const index  = currentDataset === 'spl_units' ? 'building_unit' : 'building_vertical';
-  const fields = currentDataset === 'spl_units'
-    ? ['properties.UNIT_ID', 'properties.NAME', 'properties.NAME_LONG', 'properties.UnitAddres^3', 'properties.LabelNames']
-    : ['properties.UnitVerticalAddress^3', 'properties.ShortAddress^1.8'];
+  const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_unit';
+  const fields = currentDataset === 'va_building'
+    ? ['properties.VerticalAddress^3', 'properties.ShortAddress^1.8']
+    : ['properties.UNIT_ID', 'properties.NAME', 'properties.NAME_LONG', 'properties.UnitAddres^3', 'properties.LabelNames'];
 
   const esQuery = {
     query: {
@@ -526,16 +527,16 @@ window.searchUnits = async function() {
       const props = feat.properties || {};
       const item  = document.createElement('div');
       item.className = 'result-item';
-      const isUnit = currentDataset === 'spl_units';
+      const isUnit = currentDataset === 'va_building';
       if (isUnit) {
+        item.innerHTML = `<strong>${props.VerticalAddress || props.ShortAddress || '—'}</strong>
+          Floor ${props.FloorID ?? '—'} · ${props.FloorUsage || '—'}<br>
+          <small>Bldg height: ${props.BuildingHeight ? props.BuildingHeight.toFixed(1) + 'm' : '—'}</small>`;
+      } else {
         item.innerHTML = `<strong>${props.UNIT_ID || 'N/A'}</strong>
           ${props.LabelNames || props.NAME_LONG || 'Unnamed'}
           ${props.UnitAddres ? '· ' + props.UnitAddres : ''}<br>
           <small>Floor: ${props.Base != null ? props.Base.toFixed(2) + 'm' : '—'} · Type: ${props.USE_TYPE || '—'}</small>`;
-      } else {
-        item.innerHTML = `<strong>${props.UnitVerticalAddress || props.fkFloorGUID || '—'}</strong>
-          Floor ${props.FloorID ?? '—'} · ${props.UseType || '—'}<br>
-          <small>Bldg height: ${props.BuildingHeight ? props.BuildingHeight.toFixed(1) + 'm' : '—'}</small>`;
       }
       item.onclick = () => _zoomToFeature(feat, item, isUnit);
       resultsEl.appendChild(item);
@@ -579,10 +580,13 @@ function _searchClearHighlight() {
 async function _zoomToFeature(feature, itemEl, isUnit) {
   document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
   itemEl.classList.add('active');
+  // Clear previous highlights
   _searchClearHighlight();
 
+  // Validate geometry
   if (!feature.geometry) { setStatus('No geometry for this feature.', 'warn'); return; }
 
+  // Calculate feature bounds
   const bounds = new maplibregl.LngLatBounds();
   const flatten = arr => {
     if (typeof arr[0] === 'number') bounds.extend([arr[0], arr[1]]);
@@ -630,15 +634,15 @@ async function _zoomToFeature(feature, itemEl, isUnit) {
 
     setTimeout(() => {
       let html = `<div style="font-size:12px;line-height:1.6;color:var(--text)">
-        <strong style="color:var(--text);font-size:13px">${props.NAME || props.UnitVerticalAddress || props.UNIT_ID || 'Feature'}</strong><br>`;
+        <strong style="color:var(--text);font-size:13px">${props.NAME || props.VerticalAddress || props.UNIT_ID || 'Feature'}</strong><br>`;
       if (isUnit) {
+        html += `<b>Address:</b> ${props.VerticalAddress || '—'}<br>
+                 <b>Floor:</b> ${props.FloorID ?? '—'}<br>
+                 <b>Usage:</b> ${props.FloorUsage || '—'}`;
+      } else {
         html += `<b>ID:</b> ${props.UNIT_ID || '—'}<br>
                  <b>Type:</b> ${props.USE_TYPE || '—'}<br>
                  <b>Floor:</b> ${props.Base != null ? props.Base.toFixed(2) + 'm' : '—'}`;
-      } else {
-        html += `<b>Address:</b> ${props.UnitVerticalAddress || '—'}<br>
-                 <b>Floor:</b> ${props.FloorID ?? '—'}<br>
-                 <b>Usage:</b> ${props.UseType || '—'}`;
       }
       html += '</div>';
       searchPopup = new maplibregl.Popup({ offset: 12, closeButton: true, maxWidth: '260px' })
@@ -1495,11 +1499,8 @@ async function _runFacilitySearch(lngLat, ftype) {
       throw new Error(detail);
     }
 
-    console.log('%c Facility API Data:', 'color: #22d98a; font-weight: bold;', res);
-    console.table(res.facilities);   // Nice table view of facilities
-
     data = await res.json();
-
+    // Log to check errors
     console.log('%c Facility API Data:', 'color: #22d98a; font-weight: bold;', data);
     console.table(data.facilities);   // Nice table view of facilities
     // =======================================================
