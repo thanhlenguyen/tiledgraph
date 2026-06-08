@@ -31,7 +31,7 @@
     <!-- ── Search Section (top, slides sidebar down when results appear) ── -->
     <div id="search-section" class="search-section">
       <div class="search-header" id="search-toggle" onclick="toggleSearchPanel()">
-        <span>🔍 Search Buildings</span>
+        <span>🔍 Search Vertical Address</span>
         <span id="search-chevron" class="search-chevron">▾</span>
       </div>
       <div id="search-body" class="search-body">
@@ -40,7 +40,7 @@
           <label><input type="radio" name="dataset" value="spl_units"> SPL Units</label>
         </div>
         <div class="search-bar">
-          <input type="text" id="searchInput" placeholder="Unit ID, Name, Address..." onkeypress="if(event.key==='Enter') searchUnits()" />
+          <input type="text" id="searchInput" placeholder="Vertical Address, Short Address..." onkeypress="if(event.key==='Enter') searchUnits()" />
           <button onclick="searchUnits()">Search</button>
         </div>
         <div id="results" class="results-list"></div>
@@ -51,8 +51,8 @@
     <div id="brand">
       <span class="brand-icon">◈</span>
       <div>
-        <div class="brand-title">Searching and GeoRouting</div>
-        <div class="brand-sub">Valhalla · VROOM</div>
+        <div class="brand-title">GeoRouting - Location tasks</div>
+        <!-- <div class="brand-sub">Valhalla · VROOM</div> -->
       </div>
     </div>
 
@@ -82,19 +82,21 @@
       </div>
 
       <!-- Click status -->
-      <div id="route-pick-status" class="pick-status">
-        <div class="pick-row">
-          <span id="route-s-dot" class="dot dot-start"></span>
-          <span id="route-s-label">Start — click map</span>
+      <div class="route-pick-container" >      
+        <div id="route-pick-status" class="pick-status">
+          <div class="pick-row">
+            <span id="route-s-dot" class="dot dot-start"></span>
+            <span id="route-s-label">Start — click map</span>
+          </div>
+          <div class="pick-row">
+            <span id="route-e-dot" class="dot dot-end"></span>
+            <span id="route-e-label">End — click map</span>
+          </div>
         </div>
         <div class="pick-swap-row">
           <button class="btn-swap" onclick="routeSwapPoints()" title="Swap start ↔ end">⇅</button>
         </div>
-        <div class="pick-row">
-          <span id="route-e-dot" class="dot dot-end"></span>
-          <span id="route-e-label">End — click map</span>
-        </div>
-      </div>
+      </div>  
 
       <div class="btn-row">
         <button class="btn-action" id="route-pick-btn" onclick="routeActivate()">📍 Pick Points</button>
