@@ -2,7 +2,7 @@ import json
 from elasticsearch import Elasticsearch, helpers
 
 # Connect to ES (update host if not localhost: http://localhost:9200, dev host: https://non-prd-elastic-mapservice.address.gov.sa/)
-es = Elasticsearch(["http://localhost:9200"])
+es = Elasticsearch(["https://non-prd-elastic-mapservice.address.gov.sa/"])
 
 geojson_file = "/mnt/d/Git/tiledgraph/buildingfloors.geojson"  # Path to your GeoJSON file
 index = "building_floors"  # Target ES index name

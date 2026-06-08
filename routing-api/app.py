@@ -11,7 +11,7 @@ and four backend services:
   │                 │ isochrone (reachability) polygons              │
   │ VROOM           │ Vehicle Routing Problem / TSP optimisation     │
   │ PostGIS         │ /nearest_facility_pg — spatial query via SQL   │
-  │ Elasticsearch   │ /nearest_facility    — geo_distance query      │
+  │ Elasticsearch   │ /nearest_facility_es  — geo_distance query      │
   └─────────────────┴────────────────────────────────────────────────┘
 
 All endpoints live under /api/ (proxied by Nginx → port 5000).
@@ -709,7 +709,7 @@ async def nearest_facility_pg(
 
 
 # =============================================================================
-# NEAREST FACILITY — Elasticsearch  →  GET /nearest_facility
+# NEAREST FACILITY — Elasticsearch  →  GET /nearest_facility_es
 #
 # DATA SOURCE: Elasticsearch "pois" index
 #
@@ -741,8 +741,8 @@ async def nearest_facility_pg(
 # geo_point fields, and the code below handles both.
 # =============================================================================
 
-@app.get("/nearest_facility", tags=["Facility"])
-async def nearest_facility(
+@app.get("/nearest_facility_es", tags=["Facility"])
+async def nearest_facility_es(
     lon:             Annotated[float, Query(ge=-180, le=180)],
     lat:             Annotated[float, Query(ge=-90,  le=90)],
     type:            str   = "hospital",

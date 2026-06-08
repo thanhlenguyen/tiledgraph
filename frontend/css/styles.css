@@ -396,6 +396,13 @@ input[type="range"] {
 .btn-ghost:hover { border-color: var(--red); color: var(--red); }
 
 /* ── Pick status ──────────────────────────────────────────── */
+.route-pick-container {
+  display: flex;
+  align-items: center; /* Vertically centers the swap button relative to the box */
+  gap: 10px; /* Space between the box and your button */
+  width: 100%;
+}
+
 .pick-status {
   font-size: 0.72rem;
   color: var(--text-dim);
@@ -406,7 +413,8 @@ input[type="range"] {
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 4px;
+  flex-grow: 1; /* Optional: allows the status box to fill available space */
 }
 
 .dot {
@@ -415,34 +423,34 @@ input[type="range"] {
   border-radius: 50%;
   margin-right: 6px;
   vertical-align: middle;
+  flex-shrink: 0; /* Prevents the dots from becoming tiny or squished */
 }
-.dot-start   { background: var(--green); }
-.dot-end     { background: var(--red); }
+.dot-start   { background: var(--green) !important; }
+.dot-end     { background: var(--red) !important; }
 .dot.placed  { box-shadow: 0 0 0 2px rgba(255,255,255,0.25); }
 
 .pick-row {
   display: flex;
   align-items: center;
-  gap: 6px;
   line-height: 2;
 }
 
 .pick-swap-row {
   display: flex;
-  justify-content: flex-start;
-  padding-left: 1px;
-  margin: -2px 0;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-swap {
-  width: 24px;
-  height: 24px;
+  width: 1.5em;
+  height: 1.5em;
   padding: 0;
   background: var(--surface);
   border: 1px solid var(--border2);
   border-radius: 4px;
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-size: 1.4rem;
+  font-weight: bold;
   line-height: 1;
   cursor: pointer;
   display: flex;
@@ -592,26 +600,33 @@ input[type="range"] {
 
 /* Facility result markers */
 .fac-marker {
-  width: 32px; height: 32px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
   border: 2.5px solid rgba(255,255,255,0.6);
-  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 15px;
-  cursor: pointer;
   box-shadow: 0 3px 10px rgba(0,0,0,0.5);
+  cursor: pointer;
   transition: transform 0.1s;
-  position: relative;
+  /* position: relative; -- this one made me headache to find the way to move marker to location */ 
 }
 .fac-marker:hover { transform: scale(1.2); }
 
 .fac-badge {
   position: absolute;
-  top: -6px; right: -6px;
-  width: 16px; height: 16px;
-  border-radius: 50%;
+  top: -6px; 
+  right: -6px;
+  width: 16px; 
+  height: 16px;
   background: var(--surface);
   border: 1.5px solid;
-  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
   font-family: var(--font-mono);
   font-size: 8px;
   font-weight: 700;
