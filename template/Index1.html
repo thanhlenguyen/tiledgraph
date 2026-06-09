@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>KSA Route &amp; Service Analysis</title>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       EXTERNAL DEPENDENCIES
+       ─────────────────────────────────────────────────────────────────────
+       MapLibre GL JS  — renders the map tiles and layers
+       Google Fonts    — Inter typeface for the UI
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
+  <link  href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- App stylesheet (see css/styles.css for theme variables and layout rules) -->
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     ROOT LAYOUT
+     ─────────────────────────────────────────────────────────────────────────
+     Everything lives inside #map which fills 100 % of the viewport.
+     Panels and controls are absolutely / fixed positioned on top of it.
+
+     LAYOUT SWAP GUIDE
+     ─────────────────
+     Current layout:  "floating panels over the map" (panels sit inside #map)
+     ─ Control panel  → top-center floating pill  (.control-panel.header)
+     ─ Search panel   → top-left floating box     (.search-panel)
+     ─ Feature panel  → top-right floating box    (.control-panel.feature-info-panel)
+
+     To switch to a dark sidebar layout (like App 2):
+     1. Replace #map as root with a flex wrapper:
+           <div id="app">
+             <nav id="sidebar">…panels here…</nav>
+             <div id="map"></div>
+           </div>
+     2. Move the three panel divs inside <nav id="sidebar">.
+     3. Update CSS: remove absolute positioning from panels, give sidebar a
+        fixed width (e.g. 290px) and set #map { left: 290px }.
+     4. The JS layer/marker logic is unchanged — only CSS coordinates move.
+     ─────────────────────────────────────────────────────────────────────── -->
+<div id="map">
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PANEL 1 — MAIN CONTROL PANEL  (top-center floating pill)
+       ─────────────────────────────────────────────────────────────────────
+       Contains: mode switcher, route options, facility selector, sliders,
+                 and the current-mode instruction text.
+
+       Behaviour:
+         • Desktop: expanded by default, collapses to a pill when minimised
+         • Mobile: starts minimised, click pill header to expand
+
+       To hide this panel entirely: add class="hidden" or set display:none.
+       To move it to the sidebar: cut the div and paste inside <nav>.
+       ═════════════════════════════════════════════════════════════════════ -->
+  <div class="control-panel header panel-minimised">
+
+    <!-- Pill label shown only while minimised (controlled by CSS) -->
+    <span class="panel-minimised-label">🗺️ Routing &amp; Services</span>
+
+    <!-- ── Panel body (hidden while minimised) ── -->
+    <div class="header-content">
+      <h1 class="title">Routing and Services Analysis Tool</h1>
+
+      <!-- ── MODE SWITCHER ──
+           Four tool modes — only one active at a time.
+           JS: switchMode() in scripts.js section §8.
+           To add a new mode: add a button here + add a case in switchMode(). -->
+      <div class="mode-switcher">
+        <button id="mode-route"    class="mode-btn active" type="button">🗺️ A→B Route</button>
+        <button id="mode-tsp"      class="mode-btn"        type="button">🔄 TSP Multi</button>
+        <button id="mode-facility" class="mode-btn"        type="button">🏥 Nearest Facility</button>
+        <button id="mode-service"  class="mode-btn"        type="button">🚚 Service Area</button>
+      </div>
+
+      <!-- ── ROUTE OPTIONS  (visible only in "route" mode) ──
+           JS: setupEventHandlers() wires the buttons and checkbox. -->
+      <div id="route-options" class="mode-specific-controls">
+        <label class="route-option-label">Route Optimization:</label>
+        <div class="route-option-buttons">
+          <button id="opt-fastest"  class="route-opt-btn active" type="button">⚡ Fastest</button>
+          <button id="opt-shortest" class="route-opt-btn"        type="button">📏 Shortest</button>
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="show-alternatives" checked />
+          Show 3 alternative routes
+        </label>
+      </div>
+
+      <!-- ── FACILITY TYPE SELECTOR  (visible only in "facility" mode) ──
+           Values here must match _ALLOWED_FACILITY_TYPES in app.py and
+           FACILITY_COLORS / FACILITY_ICONS in scripts.js §1. -->
+      <div id="facility-selector" class="hidden mode-specific-controls">
+        <label for="facility-type-select">Facility Type:</label>
+        <select id="facility-type-select">
+          <option value="hospital">Hospital</option>
+          <option value="fire station">Fire Station</option>
+          <option value="police">Police</option>
+        </select>
+      </div>
+
+      <!-- ── FACILITY SLIDERS  (visible only in "facility" mode) ── -->
+      <div id="facility-sliders-container" class="hidden mode-specific-controls">
+        <div class="sliders-row">
+          <div class="slider-column">
+            <label class="slider-label">
+              Find: <span id="facility-count-value">5</span> facilities
+            </label>
+            <input type="range" id="facility-count-input"
+                   min="1" max="10" value="5" step="1" class="range-slider" />
+          </div>
+          <div class="slider-column">
+            <label class="slider-label">
+              Radius: <span id="distance-value">10</span> km
+            </label>
+            <input type="range" id="distance-input"
+                   min="1" max="30" value="10" step="1" class="range-slider" />
+          </div>
+        </div>
+      </div>
+
+      <!-- ── SERVICE AREA TIME SLIDER  (visible only in "service" mode) ── -->
+      <div id="time-slider" class="hidden mode-specific-controls">
+        <label class="slider-label">
+          Service Time: <span id="time-value">5</span> min
+        </label>
+        <input type="range" id="time-input"
+               min="1" max="15" value="5" step="1" class="range-slider" />
+      </div>
+    </div><!-- /header-content -->
+
+    <!-- Current instruction line (updated by updateModeInstructions() in §8) -->
+    <p class="instruction" id="mode-instruction">
+      Click: <span class="highlight start">Start</span> →
+      <span class="highlight end">End</span>
+    </p>
+  </div><!-- /control-panel.header -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PANEL 2 — FEATURE INFO PANEL  (top-right, info pointer mode only)
+       ─────────────────────────────────────────────────────────────────────
+       Shown when the ℹ️ button is active. Displays raw GeoJSON properties
+       of whatever map feature the user clicks.
+
+       JS: toggleInfoPointer() §5, setupDraggablePanel() §6.
+       To remove this feature: delete this div and toggleInfoPointer() call.
+       ═════════════════════════════════════════════════════════════════════ -->
+  <div id="feature-info-panel" class="control-panel feature-info-panel hidden">
+    <div class="feature-info-header">
+      <h3>Feature Information</h3>
+      <button id="close-feature-info" class="close-btn" type="button">✕</button>
+    </div>
+    <div id="feature-info-content" class="feature-info-content">
+      <p class="info-hint">Click on a feature to see details</p>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       PANEL 3 — SEARCH PANEL  (top-left, Elasticsearch building search)
+       ─────────────────────────────────────────────────────────────────────
+       Two datasets selectable via radio:
+         • SPL Units       → Elasticsearch index: building_units
+         • Vertical Addrs  → Elasticsearch index: buildings_vertical
+
+       Clicking a result zooms the map to the feature in 3D BDF style.
+
+       JS: searchUnits(), zoomToFeature(), addHighlightAndAnimate() §16.
+       ES:  ES_URL constant in scripts.js §1 — change the URL to point to
+            your Elasticsearch instance (or Nginx proxy path).
+
+       Mobile: starts minimised as a pill; tap to expand.
+       Desktop: starts expanded.
+
+       To remove search entirely: delete this div and §16 in scripts.js.
+       ═════════════════════════════════════════════════════════════════════ -->
+  <div id="search-control" class="maplibregl-ctrl maplibregl-ctrl-group search-panel">
+
+    <!-- Pill (mobile-only) — tapping this expands the panel -->
+    <div class="search-panel-pill">
+      <span class="pill-icon">🔍</span>
+      <span>Search</span>
+    </div>
+
+    <!-- Dataset radio toggle -->
+    <div class="dataset-selector">
+      <label><input type="radio" name="dataset" value="spl_units" checked> SPL Units</label>
+      <label><input type="radio" name="dataset" value="va_samples"> Vertical Addresses</label>
+    </div>
+
+    <!-- Search input + button -->
+    <div class="search-bar">
+      <input type="text" id="searchInput" placeholder="Search by ID, Name, Address..." />
+      <button onclick="searchUnits()">Search</button>
+    </div>
+
+    <!-- Results list (populated dynamically by searchUnits()) -->
+    <div id="results" class="results-list"></div>
+
+    <!-- Info / status box — also used by showInfo() for routing feedback -->
+    <div id="info-box" class="info-panel hidden">
+      <p id="route-info" class="info-text">Click to start</p>
+    </div>
+
+  </div><!-- /search-panel -->
+
+</div><!-- /#map -->
+
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SCRIPTS
+     ─────────────────────────────────────────────────────────────────────────
+     Defer keeps the script from blocking HTML parsing.
+     All logic lives in js/scripts.js — see section index at top of that file.
+     ═════════════════════════════════════════════════════════════════════════ -->
+<script src="js/scripts.js" defer></script>
+</body>
+</html>

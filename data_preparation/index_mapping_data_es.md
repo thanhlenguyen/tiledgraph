@@ -1,6 +1,6 @@
-building_units.geojson
+building_unit.geojson
 ```json
-PUT /building_units_v2
+PUT /building_units
 {
   "settings": {
     "analysis": {
@@ -31,9 +31,53 @@ PUT /building_units_v2
   }
 }
 
-buildings_vertical
 ```json
-PUT /buildings_vertical_v2
+// Count number imported records
+GET /building_units/_count
+
+// Show data structure
+GET /building_units/_mapping
+
+// Searching
+GET /building_units/_search
+{
+  "query": {
+    "match_all": {}
+  },
+  "size": 5                       // show only first 5 documents (default is 10)
+}
+
+// Remove old one 
+
+DELETE building_units
+```
+Reindex:
+```json
+POST _reindex
+{
+  "source": {
+    "index": "building_units"
+  },
+  "dest": {
+    "index": "building_units_v2"
+  }
+}
+```
+
+Alias new one with old name incase we don't want to change the code of app
+
+```json
+POST _aliases
+{
+  "actions": [
+    { "add": { "index": "building_units_v2", "alias": "building_units" } }
+  ]
+}
+
+
+building_verticals
+```json
+PUT /building_verticals
 {
   "settings": {
     "analysis": {
@@ -60,29 +104,69 @@ PUT /buildings_vertical_v2
   }
 }
 ```
-Reindex:
+
+pois
 ```json
-POST _reindex
+PUT /pois
 {
-  "source": {
-    "index": "buildings_vertical"
-  },
-  "dest": {
-    "index": "buildings_vertical_v2"
+  "settings": {
+    "analysis": {
+      "normalizer": {
+        "lowercase_normalizer": {
+          "type": "custom",
+          "filter": ["lowercase"]
+        }
+      }
+    }
+  },    
+  "mappings": {
+    "dynamic": "true",              // ← change to "strict" later when stable
+    "properties": {
+      "id": { "type": "interger" }, // exact match, no full-text needed (codes like "12345 67890") 
+      "name": { "type": "keyword", "normalizer": "lowercase_normalizer" },
+      "address": { "type": "text" },
+      "type": { "type": "keyword", "normalizer": "lowercase_normalizer" },
+      "class": { "type": "keyword", "normalizer": "lowercase_normalizer"  },
+      "geometry": { "type": "geo_point" }
+    }
   }
 }
 ```
-Remove old one 
+building_floors
 ```json
-DELETE buildings_vertical
-```
-
-Alias new one with old name incase we don't want to change the code of app
-
-```json
-POST _aliases
+PUT /building_floors
 {
-  "actions": [
-    { "add": { "index": "buildings_vertical_v2", "alias": "buildings_vertical" } }
-  ]
+  "settings": {
+    "analysis": {
+      "normalizer": {
+        "lowercase_normalizer": {
+          "type": "custom",
+          "filter": ["lowercase"]
+        }
+      }
+    }
+  },    
+  "mappings": {
+    "dynamic": "true",              // ← change to "strict" later when stable
+    "properties": {
+      "OBJECTID" : {"type": "integer" },
+      "ShortAddress" : {"type": "keyword", "normalizer": "lowercase_normalizer" },
+      "VerticalAddress" : {"type": "keyword", "normalizer": "lowercase_normalizer" },
+      "BuildingUseType" : {"type": "text" },
+      "Building_Type" : {"type": "integer" },
+      "BuildingHeight" : {"type": "float" },
+      "BuildingID" : {"type": "text" },
+      "NoofFloors" : {"type": "integer" },
+      "FloorsBelowGround" : {"type": "integer" },
+      "FloorsAboveGround" : {"type": "integer" },
+      "FloorName" : {"type": "text" },
+      "FloorID" : {"type": "text" },
+      "FloorNumber" : {"type": "integer" },
+      "FloorUsage" : {"type": "text" },
+      "NoOfUnits" : {"type": "integer" },
+      "Unit_Type" : {"type": "integer" },
+      "geometry": { "type": "geo_shape" }
+    }
+  }
 }
+```

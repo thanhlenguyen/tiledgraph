@@ -49,6 +49,12 @@
       "minzoom": 14,
       "maxzoom": 16
     },
+    "building_floors": {
+      "type": "vector",
+      "tiles": ["http://localhost:3000/building_floors/{z}/{x}/{y}"],
+      "minzoom": 14,
+      "maxzoom": 16
+    },
     "spl_vertical": {
       "type": "vector",
       "tiles": ["http://localhost:3000/spl_vertical_address/{z}/{x}/{y}"],
@@ -518,9 +524,10 @@
       "source": "building_footprints",
       "source-layer": "Riyadh",
       "minzoom": 14,
-      "layout": {"visibility": "visible"},
+      "layout": {"visibility": "none"},
       "paint": {
           "fill-extrusion-color": "#e8dcc5",
+          "fill-extrusion-opacity": 0.7,
           "fill-extrusion-height": ["get", "Height"]
       }
     },
@@ -533,8 +540,42 @@
       "layout": {"visibility": "visible"},
       "paint": {
           "fill-extrusion-height": ["get", "rel_height"],
+          "fill-extrusion-opacity": 0.7,
           "fill-extrusion-color": "#e8dcc5"
       }
+    },
+    {
+      "id": "Floors",
+      "type": "fill-extrusion",
+      "source": "building_floors",
+      "source-layer": "BuildingFloor",
+      "minzoom": 14,
+      "layout": {"visibility": "visible"},      
+      "paint": {
+          "fill-extrusion-height": [
+              "*",
+              ["/",
+                ["get", "BuildingHeight"],
+                ["get", "FloorsAboveGround"]
+              ],
+              ["+", ["get", "FloorNumber"], 1]
+            ],
+          "fill-extrusion-base": [
+              "*",
+              ["/",
+                ["get", "BuildingHeight"],
+                ["get", "FloorsAboveGround"]
+              ],
+              ["get", "FloorNumber"]
+            ],
+          "fill-extrusion-opacity": 0.7,
+          "fill-extrusion-color": [
+              "case",
+              ["==", ["%", ["to-number", ["get", "FloorNumber"]], 2], 0],
+              "#FDEB9E",  
+              "#FFF7C5"   
+              ]
+          }
     },
     {
       "id": "address-label",
@@ -570,7 +611,7 @@
             ["get", "HEIGHT"]
         ],
         "fill-extrusion-base": ["get", "Base"],
-        "fill-extrusion-opacity": 0.0,
+        "fill-extrusion-opacity": 0.8,
         "fill-extrusion-color": [
             "match",
             ["get", "LEVEL_ID"],
@@ -594,7 +635,7 @@
     "source": "spl_vertical",
     "source-layer": "Vertical",
     "minzoom": 14,
-    "layout": {"visibility": "visible"},
+    "layout": {"visibility": "none"},
     "paint": {
         "fill-extrusion-height": [
             "*",

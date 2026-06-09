@@ -29,18 +29,24 @@ df = pl.read_database(
             b.OBJECTID,
             b.fkShortAddress,
             b.BuildingUseType,
-            Building_Type,
+            b.Building_Type,
             b.BuildingHeight,
-            f.BuildingID,
             b.NoofFloors,
-            f.FloorName,
-            f.FloorUsage,
             b.FloorsBelowGround,
             b.FloorsAboveGround,
-            f.NoOfUnits,
             b.Unit_Type,
             --b.Shape,
-            b.Geometry_WKB
+            b.Geometry_WKB,
+            f.BuildingID,
+            f.FloorName,
+            f.FloorID,
+            f.FloorUsage,
+            f.NoOfUnits,
+            CASE 
+                WHEN f.FloorID ='G' THEN 0 
+                WHEN TRY_CAST(f.FloorID AS INT) IS NOT NULL THEN CAST(f.FloorID AS INT) 
+                ELSE -1 
+            END AS FloorNumber
         FROM
             {table_schema}.{building} as b 
             Full Join {table_schema}.{floor} as f 
@@ -62,16 +68,25 @@ convert_query = f"""
     COPY (
         SELECT		
             OBJECTID,
-            fkShortAddress,
+            fkShortAddress as ShortAddress,
+            CASE 
+                WHEN Building_Type == 1 THEN CONCAT(fkShortAddress,'-',FloorID)
+                ELSE CONCAT(fkShortAddress,'-',BuildingID,FloorID)
+            END AS VerticalAddress,    
             BuildingUseType,
             Building_Type,
-            BuildingHeight,
+            CASE 
+                WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3 
+                ELSE FloorsAboveGround * 5
+            END AS BuildingHeight,
             BuildingID,
             NoofFloors,
-            FloorName,
-            FloorUsage,
             FloorsBelowGround,
             FloorsAboveGround,
+            FloorName,
+            FloorID,
+            FloorNumber,
+            FloorUsage,
             NoOfUnits,
             Unit_Type,
             --Shape AS geometry 
@@ -85,3 +100,5 @@ con.execute(convert_query)
 con.close()
 
 print("GeoJSON exported successfully.")
+print("Convert to tiles layer: ")
+print("tippecanoe -z16 -Z14 --layer BuildingFloor -o building_floors.pmtiles -f -pc buildingfloors.geojson")
