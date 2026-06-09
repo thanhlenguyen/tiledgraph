@@ -23,10 +23,10 @@
 // "bearing" rotates the map (0 = north-up).
 // ---------------------------------------------------------------------------
 const STYLES = [
-    { id: 'default', name: 'Default',   url: '/styles/style.json',     pitch: 0,  zoom: 13, bearing: 0   },
-    { id: 'sat',     name: 'Satellite', url: '/styles/style_sat.json', pitch: 0,  zoom: 13, bearing: 0   },
-    { id: '3d',      name: '3D',        url: '/styles/style_3d.json',  pitch: 45, zoom: 14, bearing: 0   },
-    { id: 'bdf',     name: 'BDF',       url: '/styles/style_bdf.json', pitch: 60, zoom: 17, bearing: -20 },
+    { id: 'basic-style',name: 'Default',   url: '/styles/mt-basic-style.json', pitch: 0, zoom: 10, bearing: 0 },
+    { id: 'sat-style',  name: 'Satellite', url: '/styles/mt-sat-style.json', pitch: 0, zoom: 10, bearing: 0 },
+    { id: '3d-style',   name: '3D',        url: '/styles/mt-3d-style.json', pitch: 45, zoom: 13, bearing: 0 },
+    { id: 'bdf-style',  name: 'BDF',       url: '/styles/mt-bdf-style.json', pitch: 60, zoom: 17, bearing: -20 }
 ];
 
 // ---------------------------------------------------------------------------
@@ -35,10 +35,10 @@ const STYLES = [
 // ---------------------------------------------------------------------------
 const BACKEND_URL = '/api';
 const API = {
-    route:              `${BACKEND_URL}/route`,               // Valhalla turn-by-turn routing
+    route:              `${BACKEND_URL}/route_val`,               // Valhalla turn-by-turn routing
     optimize:           `${BACKEND_URL}/optimize_route`,      // VROOM vehicle-route optimisation
     isochrone:          `${BACKEND_URL}/isochrone`,           // Valhalla reachability polygons
-    nearestFacility:    `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
+    nearestFacility:    `${BACKEND_URL}/nearest_facility_val`,    // Elastic Search + Valhalla
     nearestFacilityPg:  `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
 };
 

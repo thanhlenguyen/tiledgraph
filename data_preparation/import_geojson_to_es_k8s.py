@@ -14,8 +14,8 @@ es = Elasticsearch(
     request_timeout=300
 )
 
-INDEX_NAME = "building_floors"
-GEOJSON_FILE = r"D:\Git\tiledgraph\buildingfloors.geojson" 
+INDEX_NAME = "building_pois"
+GEOJSON_FILE = r"D:\Git\mapserver\data\pois.geojson" 
 
 
 # Load GeoJSON
