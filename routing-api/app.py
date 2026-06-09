@@ -384,7 +384,7 @@ def _build_route_features(
 # the response unchanged (errors included).
 # =============================================================================
 
-@app.post("/route", tags=["Routing"])
+@app.post("/route_val", tags=["Routing"])
 async def valhalla_route(request: Request):
     """
     Point-to-point or multi-stop routing.

@@ -30,12 +30,15 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Upstream service URLs
-VALHALLA_URL = os.getenv("VALHALLA_URL", "https://map-tiles-frontend.address.gov.sa/valhalla")
-VROOM_URL    = os.getenv("VROOM_URL",    "https://map-tiles-frontend.address.gov.sa/vroom")
-ES_URL       = os.getenv("ES_URL",       "https://non-prd-elastic.address.gov.sa")
+VALHALLA_URL = os.getenv("VALHALLA_URL", "http://map-tiles-valhalla-dev:80")
+VROOM_URL    = os.getenv("VROOM_URL",    "http://map-tiles-vroom-dev:80")
+ES_URL       = os.getenv("ES_URL",       "https://non-prd-elastic.address.gov.sa/")
+ES_BASIC_AUTH = os.getenv("ES_BASIC_AUTH", "")  # pre-encoded "user:pass" base64; injected as Authorization: Basic ...
 
 # Elasticsearch index that holds POI / facility documents
 ES_FACILITY_INDEX = os.getenv("ES_FACILITY_INDEX", "building_pois")
+
+_ES_HEADERS = {"Authorization": f"Basic {ES_BASIC_AUTH}"} if ES_BASIC_AUTH else {}
 
 # Valhalla costing profile used for facility routing ("auto" = car)
 VALHALLA_COSTING = "auto"
@@ -421,10 +424,6 @@ class TSPRequest(BaseModel):
                 raise ValueError(f"Point {i+1} latitude {lat} is outside [-90, 90].")
         return self
 
-
-# Allowed facility types (whitelist prevents SQL injection via the `type` param)
-_ALLOWED_FACILITY_TYPES = frozenset({"hospital", "fire station", "police", "clinic"})
-
 # ---------------------------------------------------------------------------
 # HELPER: map HTTP 404/400 returns from business logic to HTTPException
 # ---------------------------------------------------------------------------
@@ -440,7 +439,7 @@ def _bad_request(msg: str):
 # ENDPOINT: GET /route
 # ===========================================================================
 
-@app.get("/route", summary="A-to-B routing with alternative paths")
+@app.get("/route_pg", summary="A-to-B routing with alternative paths")
 def get_route(
     # Annotated + Query(ge=..., le=...) replaces _parse_lonlat() entirely.
     # FastAPI rejects out-of-range values with a clear 422 before our code runs.
@@ -1247,7 +1246,7 @@ async def nearest_facility_pg(
 # =============================================================================
 
 @app.get("/nearest_facility_val", tags=["Facility"])
-async def nearest_facility(
+async def nearest_facility_val(
     lon:             Annotated[float, Query(ge=-180, le=180)],
     lat:             Annotated[float, Query(ge=-90,  le=90)],
     type:            str   = "hospital",
@@ -1324,6 +1323,7 @@ async def nearest_facility(
         es_resp = await client.post(
             f"{ES_URL}/{ES_FACILITY_INDEX}/_search",
             json=es_query,
+            headers=_ES_HEADERS,
             timeout=15.0,
         )
     except httpx.RequestError as exc:

@@ -29,7 +29,7 @@ df = pl.read_database(
             b.OBJECTID,
             b.fkShortAddress,
             b.BuildingUseType,
-            B.Building_Type,
+            b.Building_Type,
             b.BuildingHeight,
             b.NoofFloors,
             b.FloorsBelowGround,
@@ -76,8 +76,8 @@ convert_query = f"""
             BuildingUseType,
             Building_Type,
             CASE 
-                WHEN FloorsAboveGround > 0 THEN FloorsAboveGround *4 
-                ELSE BuildingHeight
+                WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3 
+                ELSE FloorsAboveGround * 5
             END AS BuildingHeight,
             BuildingID,
             NoofFloors,
@@ -101,4 +101,4 @@ con.close()
 
 print("GeoJSON exported successfully.")
 print("Convert to tiles layer: ")
-print("tippecanoe -z16 -Z14 --layer building_floor -o building_floors.pmtiles -f -pc va_buildingfloors.geojson")
+print("tippecanoe -z16 -Z14 --layer BuildingFloor -o building_floors.pmtiles -f -pc buildingfloors.geojson")

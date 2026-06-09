@@ -548,7 +548,7 @@
       "id": "Floors",
       "type": "fill-extrusion",
       "source": "building_floors",
-      "source-layer": "building_floor",
+      "source-layer": "BuildingFloor",
       "minzoom": 14,
       "layout": {"visibility": "visible"},      
       "paint": {

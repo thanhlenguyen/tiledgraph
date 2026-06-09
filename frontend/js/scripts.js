@@ -35,7 +35,7 @@ const STYLES = [
 // ---------------------------------------------------------------------------
 const BACKEND_URL = '/api';
 const API = {
-    route:              `${BACKEND_URL}/route`,               // Valhalla turn-by-turn routing
+    route:              `${BACKEND_URL}/route_val`,               // Valhalla turn-by-turn routing
     optimize:           `${BACKEND_URL}/optimize_route`,      // VROOM vehicle-route optimisation
     isochrone:          `${BACKEND_URL}/isochrone`,           // Valhalla reachability polygons
     nearestFacility:    `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
