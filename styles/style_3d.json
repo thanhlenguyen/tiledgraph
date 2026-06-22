@@ -14,7 +14,7 @@
     "basemaps": {
       "type": "vector",
       "tiles": ["http://localhost:3000/basemaps/{z}/{x}/{y}"],
-      "minzoom": 1,
+      "minzoom": 0,
       "maxzoom": 12,
       "attribution": "© OvertureMaps"
     },

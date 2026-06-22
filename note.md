@@ -623,3 +623,109 @@ osmium cat street_ksa.osm -o street_ksa.osm.pbf
 Noted when testing script
 - Error when extract data when features have many nodes
 - This script do not create node when features cross together.
+
+## Phase 2: Update Valhalla data
+When the street data is updated, regenerate the OSM file for the entire street network and convert it to .osm.pbf format.
+Rebuilding the Valhalla graph tiles inside the Docker container can be time-consuming. To optimize this process:
+- Install Valhalla on the host machine
+- Create the new tiles.tar file outside the Docker container (on the host machine).
+- Copy the updated tiles.tar file into the Valhalla data folder (mounted volume).
+- Restart the Docker container for the changes to take effect.
+
+### Step 1: Install Valhalla
+1. Update System & Install Dependencies
+```Bash
+sudo apt update && sudo apt upgrade -y
+
+# Basic tools + build tools
+sudo apt install -y git wget curl ca-certificates gnupg2 \
+    cmake build-essential pkg-config autoconf libtool \
+    libsqlite3-dev libspatialite-dev spatialite-bin \
+    libcurl4-openssl-dev zlib1g-dev libgeos-dev libgeos++-dev \
+    libprotobuf-dev protobuf-compiler libboost-all-dev \
+    libluajit-5.1-dev liblz4-dev libczmq-dev libzmq5 jq unzip
+```    
+2. Build and Install prime_server (required dependency)
+```Bash
+git clone https://github.com/kevinkreiser/prime_server.git
+cd prime_server
+git submodule update --init --recursive
+
+./autogen.sh
+./configure --prefix=/usr LIBS="-lpthread"
+
+make -j$(nproc)
+sudo make install
+cd ..
+```
+3. Build and Install Valhalla
+```Bash
+git clone https://github.com/valhalla/valhalla.git
+cd valhalla
+git submodule sync
+git submodule update --init --recursive
+
+mkdir build && cd build
+
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr \
+  -DENABLE_BENCHMARKS=OFF
+
+make -j$(nproc)
+sudo make install
+
+# Verify installation
+valhalla_build_config --help
+```
+This installs the binaries (valhalla_build_tiles, valhalla_build_config, etc.) system-wide.
+4. Prepare Your OSM Data.
+```Bash
+mkdir -p ~/valhalla-data
+cd ~/valhalla-data
+
+# Prepare osm.pbf file as previous phase
+```
+5. Create Configuration File (valhalla.json)
+```Bash
+mkdir -p valhalla_tiles
+
+valhalla_build_config \
+  --mjolnir-tile-dir ${PWD}/valhalla_tiles \
+  --mjolnir-tile-extract ${PWD}/valhalla_tiles.tar \
+  --mjolnir-timezone ${PWD}/valhalla_tiles/timezones.sqlite \
+  --mjolnir-admin ${PWD}/valhalla_tiles/admins.sqlite > valhalla.json
+```
+6. Build Supporting Files (Admins + Timezones) if needed
+```Bash
+# Timezones
+valhalla_build_timezones > valhalla_tiles/timezones.sqlite
+
+# Admins (important for driving side, access, etc.)
+valhalla_build_admins -c valhalla.json switzerland-latest.osm.pbf
+```
+### Step 2 Create *.tar file
+1. Build the Graph Tiles
+```Bash
+valhalla_build_tiles -c valhalla.json switzerland-latest.osm.pbf
+```
+This step creates the hierarchy folders (0/, 1/, 2/) with .gph files inside valhalla_tiles/.
+2. Create tiles.tar:
+```Bash
+valhalla_build_extract -c valhalla.json -v
+```
+### Step 3: Replace current *.tar file
+- Stop your running Valhalla Docker container.
+- Copy the built files to your mounted volume (usually ./custom_files or similar on the host) 
+- Update the hash file (the scripted image uses this to detect changes):
+```Bash
+cd /path/to/your/custom_files
+md5sum valhalla_tiles.tar > file_hashes.txt
+```
+Restart the container with these environment variables:YAMLenvironment:
+```bash
+  - use_tiles_ignore_pbf=True
+  - force_rebuild=False
+  - build_tar=False
+```
+The container should load the pre-built valhalla_tiles.tar quickly without rebuilding.
