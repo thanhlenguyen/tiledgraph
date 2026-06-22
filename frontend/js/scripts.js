@@ -1781,19 +1781,30 @@ function injectInfoPointerBtn() {
     const topRight = document.querySelector('.maplibregl-ctrl-top-right');
     if (!topRight) return;
 
-    const group = document.createElement('div');
-    group.className      = 'maplibregl-ctrl maplibregl-ctrl-group';
-    group.style.marginTop = '8px';
+    // ── Info pointer button ──
+    const infoGroup = document.createElement('div');
+    infoGroup.className       = 'maplibregl-ctrl maplibregl-ctrl-group';
+    infoGroup.style.marginTop = '8px';
 
-    const btn     = document.createElement('button');
-    btn.className = 'info-pointer-btn';
-    btn.type      = 'button';
-    btn.innerHTML = 'ℹ️';
-    btn.title     = 'Toggle Info Pointer';
-    btn.onclick   = () => toggleInfoPointer();
+    const infoBtn     = document.createElement('button');
+    infoBtn.className = 'info-pointer-btn';
+    infoBtn.type      = 'button';
+    infoBtn.innerHTML = 'ℹ️';
+    infoBtn.title     = 'Toggle Info Pointer';
+    infoBtn.onclick   = () => toggleInfoPointer();
 
-    group.appendChild(btn);
-    topRight.appendChild(group);
+    // ── Search button (same group, below info) ──
+    const searchBtn     = document.createElement('button');
+    searchBtn.id        = 'search-fab';
+    searchBtn.className = 'search-fab-btn hidden'; // hidden by default (sidebar open)
+    searchBtn.type      = 'button';
+    searchBtn.innerHTML = '🔍';
+    searchBtn.title     = 'Open Search';
+    searchBtn.onclick   = () => expandSidebarToSearch();
+
+    infoGroup.appendChild(infoBtn);
+    infoGroup.appendChild(searchBtn);
+    topRight.appendChild(infoGroup);
 }
 
 /** Turn the Info Pointer on or off. */
@@ -2117,9 +2128,71 @@ function setupDraggablePanel() {
     panel._dragEnd   = dragEnd;
 }
 
+// =============================================================================
+// SECTION 13: SLIDE BAR TOGGLE
+// Click to show or hide Searching slide bar.
+// =============================================================================
+
+let isSidebarCollapsed = false;
+
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    isSidebarCollapsed = !isSidebarCollapsed;
+    
+    sidebar.classList.toggle('collapsed', isSidebarCollapsed);
+    document.body.classList.toggle('sidebar-collapsed', isSidebarCollapsed);
+    // Drive map expansion via CSS variable instead of sibling selector
+    document.documentElement.style.setProperty(
+        '--map-left',
+        isSidebarCollapsed ? '14px' : 'var(--sidebar-w)'
+    );
+    
+    updateSearchFab();
+    localStorage.setItem('sidebarCollapsed', isSidebarCollapsed);
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    const toggleBtn = document.getElementById('sidebar-toggle');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', toggleSidebar);
+    }
+
+    // Only restore collapsed state if user has explicitly collapsed before.
+    // Default (null / never set) = sidebar visible.
+    if (localStorage.getItem('sidebarCollapsed') === 'true') {
+        document.getElementById('sidebar').classList.add('collapsed');
+        document.body.classList.add('sidebar-collapsed');
+        isSidebarCollapsed = true;
+        document.documentElement.style.setProperty('--map-left', '14px');
+    } else {
+        // Explicitly ensure expanded state and correct map position on first load
+        document.documentElement.style.setProperty('--map-left', 'var(--sidebar-w)');
+    }
+
+    updateSearchFab();
+});
+
+/** Show/hide the floating search FAB based on sidebar state. */
+function updateSearchFab() {
+    const fab = document.getElementById('search-fab');
+    if (!fab) return;
+    fab.classList.toggle('hidden', !isSidebarCollapsed);
+}
+
+/** Expand the sidebar and focus the search input. */
+window.expandSidebarToSearch = function() {
+    if (isSidebarCollapsed) {
+        toggleSidebar();
+    }
+    // Focus search input after transition completes
+    setTimeout(() => {
+        document.getElementById('searchInput')?.focus();
+    }, 420);
+};
 
 // =============================================================================
-// SECTION 13: LAYER SWITCHER CONTROL
+// SECTION 14: LAYER SWITCHER CONTROL
 // A custom MapLibre GL control that renders a row of style buttons.
 // Clicking a button calls map.setStyle() and then restores all active layers.
 // =============================================================================
@@ -2169,9 +2242,8 @@ class LayerSwitcherControl {
     }
 }
 
-
 // =============================================================================
-// SECTION 14: BOOT
+// SECTION 15: BOOT
 // Start the application once the browser has fully loaded the page.
 // =============================================================================
 

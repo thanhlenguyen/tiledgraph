@@ -97,7 +97,7 @@ services:
       - "8002:8002"          # internal; we will proxy via Nginx later
     environment:
       - tile_urls=    # change if you want a smaller extract
-      - use_tiles_ignore_pbf=False      # Once built, don't rebuild from PBF on restart
+      - use_tiles_ignore_pbf=True      # Once built, don't rebuild from PBF on restart
       - force_rebuild=False          # set True only when you want to force a full rebuild
       - server_threads=4     # adjust to your CPU cores 
       - build_elevation=False        # set True only if you need elevation data

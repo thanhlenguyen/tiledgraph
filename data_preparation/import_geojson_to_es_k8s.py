@@ -1,5 +1,5 @@
 # This only can run from Windows, because Windows environment has VPN, 
-# If we want run from Ubuntu, we need to setup VNP on Ubuntu
+# If we want run from Ubuntu, we need to add [IP_ADDRESS_YOU_COPIED] non-prd-elastic.address.gov.sa to etc/hosts file
 import json
 import urllib3
 from elasticsearch import Elasticsearch, helpers
@@ -14,9 +14,9 @@ es = Elasticsearch(
     request_timeout=300
 )
 
-INDEX_NAME = "building_pois"
-GEOJSON_FILE = r"D:\Git\mapserver\data\pois.geojson" 
-
+INDEX_NAME = "building_floors"
+GEOJSON_FILE = "/mnt/d/Git/tiledgraph/buildingfloors.geojson"
+# GEOJSON_FILE = r"D:\Git\mapserver\data\UnitsOnlyFlat.geojson"
 
 # Load GeoJSON
 with open(GEOJSON_FILE, "r", encoding="utf-8") as f:

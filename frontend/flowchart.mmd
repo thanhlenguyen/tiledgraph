@@ -1,0 +1,40 @@
+---
+references:
+  - "File: /frontend/js/scripts.js"
+generationTime: 2026-06-17T07:26:31.221Z
+---
+flowchart TD
+    A["Window load"] --> B["initMap()"]
+    B --> C["Create MapLibre map & controls"]
+    C --> D["Bind map events and DOM listeners"]
+    D --> E["handleMapClick(event)"]
+    E --> F{"state.infoPointerActive?"}
+    F -->|Yes| G["handleInfoPointerClick(e)"]
+    F -->|No| H{"state.activeMode"}
+    H -->|route| I["routeHandleClick(lngLat)"]
+    H -->|vrp| J["vrpHandleClick(lngLat)"]
+    H -->|iso| K["isoHandleClick(lngLat)"]
+    H -->|facility| L["facilityHandleClick(lngLat)"]
+    I --> M{"route.points.length >= 2?"}
+    M -->|Yes| N["Ignore extra click"]
+    M -->|No| O["Place S/E marker and updateRoutePickStatus()"]
+    O --> P{"points complete?"}
+    P -->|No| Q["Prompt End point"]
+    P -->|Yes| R["runRouteComparison()"]
+    R --> S["fetchJSON(API.route) x3"]
+    S --> T["decodePolyline6() + addRouteLayer()"]
+    T --> U["Update route legend"]
+    J --> V["Add VRP stop marker"]
+    V --> W["Debounce and schedule runVRP() if >=2 stops"]
+    W --> X["runVRP()"]
+    X --> Y["fetchJSON(API.optimize)"]
+    Y --> Z["fetchJSON(API.route) per leg"]
+    Z --> AA["addVrpSegmentLayer() + legend"]
+    K --> AB["Set origin marker & contour params"]
+    AB --> AC["fetchJSON(API.isochrone)"]
+    AC --> AD["renderIso() + legend"]
+    L --> AE["Set facility origin marker"]
+    AE --> AF["fetch nearest facilities via API"]
+    AF --> AG["renderFacilityRoutes() + markers + legend"]
+    B --> AH["switchTab(name) clears other modes"]
+    AH --> AI["exitMode() + mode-specific clear functions"]

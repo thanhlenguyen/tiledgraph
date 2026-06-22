@@ -75,10 +75,13 @@ convert_query = f"""
             END AS VerticalAddress,    
             BuildingUseType,
             Building_Type,
-            CASE 
-                WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3 
-                ELSE FloorsAboveGround * 5
-            END AS BuildingHeight,
+            CAST(
+                CASE 
+                    WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3.5 
+                    ELSE FloorsAboveGround * 5
+                END 
+                AS FLOAT)
+            AS BuildingHeight,
             BuildingID,
             NoofFloors,
             FloorsBelowGround,
