@@ -14,7 +14,7 @@
     "basemaps": {
       "type": "vector",
       "tiles": ["http://localhost:3000/basemaps/{z}/{x}/{y}"],
-      "minzoom": 1,
+      "minzoom": 0,
       "maxzoom": 12,
       "attribution": "© OvertureMaps"
     },
@@ -165,6 +165,38 @@
       "type": "line",
       "source": "basemaps",
       "source-layer": "international",
+      "paint": {
+          "line-width": [
+              "interpolate",
+              ["linear"],
+              ["zoom"],
+              4,
+              1.5,
+              10,
+              2
+          ],
+          "line-color": "#3c3939",
+          "line-dasharray": [
+              "step",
+              ["zoom"],
+              ["literal", [2, 2]],
+              7,
+              ["literal", [6, 2, 2, 2]]
+          ]
+      }
+    },
+    {
+      "id": "country_background",
+      "type": "line",      
+      "source": "basemaps",
+      "source-layer": "CountryBoundary",
+      "paint": {"line-width": 3, "line-color": "hsl(0, 3%, 97%)"}
+    },
+    {
+      "id": "country-boundary",
+      "type": "line",
+      "source": "basemaps",
+      "source-layer": "CountryBoundary",
       "paint": {
           "line-width": [
               "interpolate",

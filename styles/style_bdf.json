@@ -14,7 +14,7 @@
     "basemaps": {
       "type": "vector",
       "tiles": ["http://localhost:3000/basemaps/{z}/{x}/{y}"],
-      "minzoom": 1,
+      "minzoom": 0,
       "maxzoom": 12,
       "attribution": "© OvertureMaps"
     },
@@ -524,7 +524,7 @@
       "source": "building_footprints",
       "source-layer": "Riyadh",
       "minzoom": 14,
-      "layout": {"visibility": "none"},
+      "layout": {"visibility": "visible"},
       "paint": {
           "fill-extrusion-color": "#e8dcc5",
           "fill-extrusion-opacity": 0.7,
@@ -568,7 +568,7 @@
               ],
               ["get", "FloorNumber"]
             ],
-          "fill-extrusion-opacity": 0.7,
+          "fill-extrusion-opacity": 1,
           "fill-extrusion-color": [
               "case",
               ["==", ["%", ["to-number", ["get", "FloorNumber"]], 2], 0],
