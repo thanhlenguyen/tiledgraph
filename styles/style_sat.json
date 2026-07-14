@@ -4,6 +4,27 @@
   "metadata": {"maputnik:renderer": "mlgljs"},
   "center": [46.6753, 24.7136],
   "zoom": 6,
+  "sprite": "http://localhost:3001/tiles/sprite/sprites",
+  "glyphs": "http://localhost:3001/tiles/font/{fontstack}/{range}.pbf",
+  "sky": {
+    "sky-color": "#199EF3",
+    "sky-horizon-blend": 0.5,
+    "horizon-color": "#ffffff",
+    "horizon-fog-blend": 0.5,
+    "fog-color": "#0000ff",
+    "fog-ground-blend": 0.5,
+    "atmosphere-blend": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        0,
+        1,
+        10,
+        1,
+        12,
+        0
+    ]
+  },
   "sources": {
     "esri-satellite": {
       "type": "raster",
@@ -15,9 +36,9 @@
     },
     "riyadh_satellite": {
       "type": "raster",
-      "tiles": ["http://localhost:3000/riyadh_satellite/{z}/{x}/{y}"],
+      "tiles": ["http://localhost:3000/riyadh/{z}/{x}/{y}"],
       "minzoom": 12,
-      "maxzoom": 22
+      "maxzoom": 18
     },    
     "basemaps": {
       "type": "vector",
@@ -58,8 +79,6 @@
       "maxzoom": 22
     }
   },
-  "sprite": "sprites/sprite",
-  "glyphs": "fonts/{fontstack}/{range}.pbf",
   "layers": [
     {
       "id": "background",

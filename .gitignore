@@ -4,5 +4,4 @@ env/
 checkcode
 building_floors.pmtiles
 buildingfloors.geojson
-buildingfloors.geojson
 *.geojson

@@ -1,3 +1,7 @@
+# =============================================================================
+# This tool will read geodata table "building" and full join with table "floor" geodatabase
+# then export to geojson file (after that convert to pmtiles or mbtiles files)
+# =============================================================================
 import polars as pl
 from sqlalchemy import create_engine
 import urllib
@@ -23,6 +27,7 @@ table_schema = "sde"
 building = "dim_building"
 floor = "dim_floor"
 
+print("reading data ......")
 df = pl.read_database(
     query = f"""
         SELECT		
@@ -98,7 +103,8 @@ convert_query = f"""
         )
         TO 'buildingfloors.geojson'
     WITH (FORMAT GDAL, DRIVER 'GeoJSON', SRS 'EPSG:4326')"""
-# print(convert_query)
+
+print("converting data...")
 con.execute(convert_query)
 con.close()
 

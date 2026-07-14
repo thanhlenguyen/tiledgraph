@@ -4,6 +4,27 @@
   "metadata": {"maputnik:renderer": "mlgljs"},
   "center": [46.6753, 24.7136],
   "zoom": 10,
+  "sprite": "http://localhost:3001/tiles/sdf_sprite/sprites",
+  "glyphs": "http://localhost:3001/tiles/font/{fontstack}/{range}.pbf",
+  "sky": {
+    "sky-color": "#199EF3",
+    "sky-horizon-blend": 0.5,
+    "horizon-color": "#ffffff",
+    "horizon-fog-blend": 0.5,
+    "fog-color": "#0000ff",
+    "fog-ground-blend": 0.5,
+    "atmosphere-blend": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        0,
+        1,
+        10,
+        1,
+        12,
+        0
+    ]
+  },
   "sources": {
     "osm": {
       "type": "raster",
@@ -50,8 +71,7 @@
       "maxzoom": 22
     }
   },
-  "sprite": "/sprites/sprite",   
-  "glyphs": "/fonts/{fontstack}/{range}.pbf",
+  
   "layers": [
     {
       "id": "background",
@@ -546,7 +566,7 @@
       "source-layer": "topology.places",
       "minzoom": 14,
       "layout": {
-        "icon-image": ["concat", ["get", "osm_icon"], "_11"],
+        "icon-image": ["get", "maki"],
         "icon-size": 1,
         "icon-allow-overlap": true,
         "text-field": ["get", "name"],
@@ -570,7 +590,19 @@
         ],
         "text-halo-color": "#ffffff",
         "text-halo-width": 0.5,
-        "icon-color": "rgba(112, 53, 53, 1)"
+        "icon-color": [
+          "match",
+          ["get", "class"],
+          ["food_and_drink_stores", "food_and_drink"],
+          "#b64f1b",
+          ["education"],
+          "#5c4923",
+          ["store_like"],
+          "#8e5a57",
+          "#78553a"
+        ],
+        "icon-halo-color": "#ffffff",
+        "icon-halo-width": 1
       }
     }
   ],

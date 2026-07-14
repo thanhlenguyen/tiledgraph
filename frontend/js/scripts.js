@@ -23,10 +23,10 @@
 // "bearing" rotates the map (0 = north-up).
 // ---------------------------------------------------------------------------
 const STYLES = [
-    { id: 'default', name: 'Default',   url: '/styles/style.json',     pitch: 0,  zoom: 13, bearing: 0   },
-    { id: 'sat',     name: 'Satellite', url: '/styles/style_sat.json', pitch: 0,  zoom: 13, bearing: 0   },
-    { id: '3d',      name: '3D',        url: '/styles/style_3d.json',  pitch: 45, zoom: 14, bearing: 0   },
-    { id: 'bdf',     name: 'BDF',       url: '/styles/style_bdf.json', pitch: 60, zoom: 17, bearing: -20 },
+    { id: 'default', name: 'Default',   url: '/tiles/style/style',     pitch: 0,  zoom: 13, bearing: 0   },
+    { id: 'sat',     name: 'Satellite', url: '/tiles/style/style_sat', pitch: 0,  zoom: 13, bearing: 0   },
+    { id: '3d',      name: '3D',        url: '/tiles/style/style_3d',  pitch: 45, zoom: 14, bearing: 0   },
+    { id: 'bdf',     name: 'BDF',       url: '/tiles/style/style_bdf', pitch: 60, zoom: 17, bearing: -20 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1511,7 +1511,7 @@ window.searchUnits = async function() {
     // openSearchPanel();
     searchClearHighlight(); // clear any previous state before a new search
 
-    const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_unit';
+    const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_units';
     const fields = currentDataset === 'va_building'
         ? ['properties.VerticalAddress^3', 'properties.ShortAddress^1.8']
         : ['properties.UnitAddres^3', 'properties.LabelNames^1.5', 'properties.NAME', ];
@@ -1623,15 +1623,17 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
         // "already exists" errors on rapid same-result clicks.
         if (state.map.getLayer(id))  state.map.removeLayer(id);
         if (state.map.getSource(id)) state.map.removeSource(id);
+
+        const bufferedGeometry = _bufferPolygon(feature.geometry, 0.2); // 0.5 m buffer
         state.map.addSource(id, {
             type: 'geojson',
-            data: { type: 'Feature', geometry: feature.geometry, properties: props },
+            data: { type: 'Feature', geometry: bufferedGeometry, properties: props },
         });
 
         let extrusionBase, extrusionHeight;
         if (currentDataset === 'va_building') {
             const floorH    = (props.BuildingHeight || 0) / (props.FloorsAboveGround || 1);
-            extrusionBase   = floorH * (props.FloorID || 0);
+            extrusionBase   = floorH * (props.FloorNumber || 0);
             extrusionHeight = extrusionBase + floorH;
         } else {
             extrusionBase   = props.Base || 0;
@@ -1655,23 +1657,78 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             firstSymbolId // insert below symbol layers so labels stay on top
         );
 
+        // ── Compute floor mid-elevation ──────────────────────────────────────
+        // We want the camera to visually center on the floor midpoint in 3D,
+        // not on the ground footprint. To do this we shift the map center
+        // southward so that, at the given pitch, the floor's mid-height
+        // projects to the screen center.
+        const floorMidM = (extrusionBase + extrusionHeight) / 2;
+
+        const buildingHeightM = props.BuildingHeight
+                            || props.HEIGHT
+                            || extrusionHeight
+                            || 20;
+
+        // Footprint centroid from bounds
+        const centroidLng = (bounds.getWest()  + bounds.getEast())  / 2;
+        const centroidLat = (bounds.getSouth() + bounds.getNorth()) / 2;
+
+        // Target zoom — fit the footprint first to calculate a sensible zoom,
+        // then we'll easeTo the shifted center at that zoom.
+        const targetPitch   = 58;
+        const targetBearing = -18;
+
         const sidebarW = parseInt(
             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w') || '340'
         ) + 20;
 
-        state.map.fitBounds(bounds, {
-            padding: { top: 100, bottom: 100, left: sidebarW, right: 100 },
-            maxZoom: 19.5,
-            pitch:   58,
-            bearing: -18,
-            duration: 1600,
-            essential: true,
+        // Screen height available (subtract sidebar padding)
+        const screenH  = window.innerHeight - 160;
+
+        // Zoom that fits the full building height in frame
+        const targetZoom = _zoomForBuildingHeight(
+            buildingHeightM, centroidLat, targetPitch, screenH
+        );
+
+        // Shift center so selected floor appears vertically centered
+        const shiftedCenter = _computeFloorCenter(
+            centroidLat, centroidLng,
+            floorMidM,
+            targetZoom,
+            targetPitch,
+            targetBearing
+        );
+
+        // state.map.fitBounds(bounds, {
+        //     padding: { top: 100, bottom: 100, left: sidebarW, right: 100 },
+        //     maxZoom: 19.5,
+        //     pitch:   58,
+        //     bearing: -18,
+        //     duration: 1600,
+        //     essential: true,
+        // });
+
+        // Give MapLibre one frame to finish the style switch before animating.
+        // Without this, easeTo fires while the canvas is still in the old style's
+        // coordinate space, causing the center shift to land in the wrong place.
+        requestAnimationFrame(() => {
+            state.map.easeTo({
+                center:   shiftedCenter,
+                zoom:     targetZoom,
+                pitch:    targetPitch,
+                bearing:  targetBearing,
+                duration: 1600,
+                padding:  { top: 80, bottom: 80, left: sidebarW, right: 80 },
+                essential: true,
+            });
         });
 
         setTimeout(() => {
             if (!state.map.getSource(id)) return; // highlight was superseded
             const popupHTML = buildPopupHTML(props, isUnit);
-            const popupPos  = getPopupAnchorPosition(bounds);
+            // const popupPos  = getPopupAnchorPosition(bounds); -- for old code without display popup with appropreate height
+            // Get anchor position AND the vertical pixel offset for this floor
+            const { lngLat: popupPos, offsetPx } = getPopupAnchorInfo(bounds, props, isUnit);
 
             // Destroy any popup that slipped through (e.g. from a prior rapid click).
             if (state.searchPopup) {
@@ -1679,13 +1736,16 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
                 state.searchPopup = null;
             }
             state.searchPopup = new maplibregl.Popup({
-                offset: 15, closeButton: true, maxWidth: '300px', className: 'unit-popup',
+                offset:  [0, -offsetPx],   // negative Y = upward in MapLibre 
+                closeButton: true, 
+                maxWidth: '300px', 
+                className: 'unit-popup',
             })
                 .setLngLat(popupPos)
                 .setHTML(popupHTML)
                 .addTo(state.map);
             state.searchPopup.on('close', () => { state.searchPopup = null; });
-        }, 900);
+        }, 1800);
     };
 
     // Always switch to BDF style before highlighting indoor data.
@@ -1700,7 +1760,7 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             b.classList.toggle('active', b.textContent === 'BDF'));
         state.map.once('idle', () => {
             restoreActiveLayers();
-            doHighlight();      // ← single idle, not chained once('idle')
+            requestAnimationFrame(() =>doHighlight());      // ← single idle, not chained once('idle') add rAF
         });
     } else {
         doHighlight();          // already on BDF — highlight immediately
@@ -1754,6 +1814,45 @@ function getPopupAnchorPosition(bounds) {
     ];
 }
 
+/**
+ * Return { lngLat, offsetPx } for the popup anchor.
+ * lngLat  — slightly outside the feature's footprint bounding box.
+ * offsetPx — upward pixel shift so the popup floats at floor height
+ *            rather than sitting on the ground plane.
+ *
+ * @param {Object} bounds   - MapLibre LngLatBounds
+ * @param {Object} props    - Feature properties (used to derive floor height)
+ * @param {boolean} isUnit  - True for va_building dataset
+ * @returns {{ lngLat: Array, offsetPx: number }}
+ */
+function getPopupAnchorInfo(bounds, props, isUnit) {
+    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest();
+
+    const lngLat = [
+        ne.lng + (ne.lng - sw.lng) * 0.2,
+        sw.lat + (ne.lat - sw.lat) * 0.65,
+    ];
+
+    // Derive the bottom elevation of this floor in metres above ground.
+    // This is the same logic used in doHighlight for fill-extrusion-base.
+    let floorBaseM = 0;
+    if (isUnit && props.BuildingHeight != null && props.FloorID != null) {
+        const floors = props.FloorsAboveGround || Math.max((props.FloorID || 0) + 1, 1);
+        const floorH = props.BuildingHeight / floors;
+        floorBaseM   = floorH * (props.FloorID || 0);
+    } else if (!isUnit && props.Base != null) {
+        floorBaseM = props.Base;
+    }
+
+    // Convert metres → screen pixels at the current camera.
+    // MapLibre exposes getZoom() and getPitch(); we estimate vertical scale
+    // using the mercator tile resolution at the feature's latitude.
+    const offsetPx = _metresToPixelOffset(floorBaseM, lngLat[1]);
+
+    return { lngLat, offsetPx };
+}
+
 /** Remove all search-highlight layers/sources and close any open popup. */
 function searchClearHighlight() {
     if (state.searchPopup) { state.searchPopup.remove(); state.searchPopup = null; }
@@ -1763,6 +1862,204 @@ function searchClearHighlight() {
     });
     state.searchHighlights = [];
     document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
+}
+/**
+ * Estimate how many CSS pixels correspond to `metres` of elevation at the
+ * current map zoom and pitch.
+ *
+ * The map projects the world onto a 512-px tile at zoom 0. At zoom Z, one
+ * tile covers 512 * 2^Z canvas pixels. We divide the circumference of the
+ * earth at the given latitude to get px/m, then scale by cos(pitch) to
+ * account for the camera tilt (tilted view compresses vertical distances).
+ *
+ * @param {number} metres   - Elevation in metres
+ * @param {number} lat      - Latitude of the feature (degrees)
+ * @returns {number}        Upward pixel offset (positive = up on screen)
+ */
+function _metresToPixelOffset(metres, lat) {
+    if (!metres || metres <= 0 || !state.map) return 0;
+
+    const zoom         = state.map.getZoom();
+    const pitch        = state.map.getPitch();
+    const tileSize     = 512;
+    const earthCircumM = 40075016.686;
+
+    // Metres per pixel at this zoom and latitude
+    const metrePx = (earthCircumM * Math.cos(lat * Math.PI / 180))
+                    / (tileSize * Math.pow(2, zoom));
+
+    // Raw pixel height of the elevation column
+    const rawPx = metres / metrePx;
+
+    // Pitch compresses the apparent height — cos(pitch) gives the vertical
+    // scale factor (0° pitch = no compression, 60° pitch ≈ 50% compression)
+    const pitchRad   = pitch * Math.PI / 180;
+    const compressed = rawPx * Math.cos(pitchRad);
+
+    // Cap at 600px so the popup can't fly off-screen on extreme zooms
+    return Math.min(Math.round(compressed), 600);
+}
+
+/**
+ * Calculate the zoom level needed to fit a building of `buildingHeightM`
+ * metres fully within the screen height at the given pitch.
+ * 
+ * @param {number} buildingHeightM - Total building height in metres
+ * @param {number} lat             - Latitude of the building
+ * @param {number} pitch           - Camera pitch in degrees
+ * @param {number} screenHeightPx  - Available screen height in pixels
+ * @returns {number} Zoom level
+ */
+function _zoomForBuildingHeight(buildingHeightM, lat, pitch, screenHeightPx) {
+    if (!buildingHeightM || buildingHeightM <= 0) return 17;
+
+    const earthCircumM = 40075016.686;
+    const tileSize     = 512;
+
+    // Use a direct mercator pixel scale — no pitch correction.
+    // MapLibre renders buildings at true scale relative to the ground tile.
+    // We just need the building footprint to be close enough that the full
+    // height is visible. Target: building height fills ~40% of screen height.
+    const targetPx = screenHeightPx * 0.40;
+    const metrePx  = buildingHeightM / targetPx;
+
+    const zoom = Math.log2(
+        (earthCircumM * Math.cos(lat * Math.PI / 180)) / (tileSize * metrePx)
+    );
+
+    return Math.min(Math.max(zoom, 15.5), 18.5);
+}
+
+/**
+ * Compute the ground-plane center point so a floor at floorMidM metres
+ * elevation appears roughly centered vertically on the pitched camera.
+ * Uses a simple south-shift based on pitch geometry.
+ *
+ * @param {number} lat        - Footprint centroid latitude
+ * @param {number} lng        - Footprint centroid longitude
+ * @param {number} floorMidM  - Floor mid-elevation in metres
+ * @param {number} zoom       - Actual target zoom level
+ * @param {number} pitch      - Camera pitch in degrees
+ * @param {number} bearing    - Camera bearing in degrees
+ * @returns {Array} [lng, lat]
+ */
+function _computeFloorCenter(lat, lng, floorMidM, zoom, pitch, bearing) {
+    if (!floorMidM || floorMidM <= 0) return [lng, lat];
+
+    // Use MapLibre's own camera projection to find the exact ground shift.
+    // Strategy:
+    //   1. Temporarily ask MapLibre where the building centroid projects
+    //      to on screen at the target camera state.
+    //   2. Find what ground point currently sits at screen center.
+    //   3. The difference is the shift we need.
+    //
+    // We do this by projecting two points and computing the pixel delta,
+    // then converting that delta back to lat/lng.
+
+    const earthCircumM = 40075016.686;
+    const tileSize     = 512;
+    const pitchRad     = pitch   * Math.PI / 180;
+    const bearingRad   = bearing * Math.PI / 180;
+
+    // Metres per pixel at target zoom and latitude
+    const metrePx = (earthCircumM * Math.cos(lat * Math.PI / 180))
+                    / (tileSize * Math.pow(2, zoom));
+
+    // How many metres on the ground plane correspond to the floor's
+    // screen-space vertical position under a pitched camera.
+    //
+    // In MapLibre's pitched camera, the center parameter is the ground
+    // point that appears at the CENTER of the viewport. The relationship
+    // between a 3D point's height and its screen Y position is:
+    //
+    //   screenY_offset = height_metres / metrePx * sin(pitch)
+    //
+    // To cancel this offset (bring the floor to screen center), we shift
+    // the ground center by that same distance in the camera-forward direction.
+    //
+    // The camera-forward direction on the ground plane is bearing + 180°
+    // (we move the center AWAY from viewer so the floor comes into view).
+
+    const screenYoffset = floorMidM / metrePx * Math.sin(pitchRad);
+    const shiftMetres   = screenYoffset * metrePx;
+
+    const latDegPerM = 1 / (earthCircumM / 360);
+    const lngDegPerM = 1 / ((earthCircumM / 360) * Math.cos(lat * Math.PI / 180));
+
+    // Camera faces `bearing` degrees. To shift center toward the camera
+    // (so the floor rises into view), we move in direction `bearing + 180`.
+    const shiftBearing = bearingRad + Math.PI;
+    const shiftLat     = shiftMetres * latDegPerM * Math.cos(shiftBearing);
+    const shiftLng     = shiftMetres * lngDegPerM * Math.sin(shiftBearing);
+
+    return [lng + shiftLng, lat + shiftLat];
+}
+
+/**
+ * Expand a GeoJSON polygon geometry outward by `metres` on every side.
+ * Works by converting the centroid offset to degrees and scaling each
+ * vertex away from the polygon centroid.
+ *
+ * @param {Object} geometry - GeoJSON Polygon or MultiPolygon geometry
+ * @param {number} metres   - Buffer distance in metres (e.g. 0.5)
+ * @returns {Object}        New geometry with expanded coordinates
+ */
+function _bufferPolygon(geometry, metres) {
+    if (!geometry || metres <= 0) return geometry;
+
+    const earthCircumM = 40075016.686;
+    const latDegPerM   = 1 / (earthCircumM / 360);
+
+    const expandRing = (ring) => {
+        // Compute centroid of this ring
+        let cx = 0, cy = 0;
+        const n = ring.length - 1; // last point === first point for closed rings
+        for (let i = 0; i < n; i++) {
+            cx += ring[i][0];
+            cy += ring[i][1];
+        }
+        cx /= n;
+        cy /= n;
+
+        // Degrees per metre in longitude depends on latitude of centroid
+        const lngDegPerM = 1 / ((earthCircumM / 360) * Math.cos(cy * Math.PI / 180));
+
+        // Push each vertex away from the centroid by `metres`
+        return ring.map((pt, i) => {
+            const dx = pt[0] - cx; // delta lng
+            const dy = pt[1] - cy; // delta lat
+
+            // Distance from centroid in metres
+            const dxM = dx / lngDegPerM;
+            const dyM = dy / latDegPerM;
+            const dist = Math.sqrt(dxM * dxM + dyM * dyM);
+
+            if (dist === 0) return pt; // centroid point — no direction to expand
+
+            // Unit vector away from centroid, scaled by buffer metres
+            const scale = (dist + metres) / dist;
+            return [
+                cx + dx * scale,
+                cy + dy * scale,
+            ];
+        });
+    };
+
+    if (geometry.type === 'Polygon') {
+        return {
+            ...geometry,
+            coordinates: geometry.coordinates.map(expandRing),
+        };
+    }
+
+    if (geometry.type === 'MultiPolygon') {
+        return {
+            ...geometry,
+            coordinates: geometry.coordinates.map(poly => poly.map(expandRing)),
+        };
+    }
+
+    return geometry; // Point, LineString etc — return unchanged
 }
 
 

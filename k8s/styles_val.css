@@ -1,5 +1,5 @@
 /* ============================================================
-   GeoRouting Lab — styles.css
+   GeoRouting Lab â€” styles.css
    Dark cartographic aesthetic: deep navy, monospace data, 
    color-coded routes, surgical precision
    ============================================================ */
@@ -28,7 +28,7 @@
   --r1: #ff9f3b;
   --r2: #a855f7;
 
-  /* Stop palette (TSP/VRP — up to 10 stops) */
+  /* Stop palette (TSP/VRP â€” up to 10 stops) */
   --s0:  #f43f5e;
   --s1:  #fb923c;
   --s2:  #facc15;
@@ -54,7 +54,7 @@ html, body {
   overflow: hidden;
 }
 
-/* ── Map ──────────────────────────────────────────────────── */
+/* â”€â”€ Map â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 #map {
   position: absolute;
   inset: 0;
@@ -62,7 +62,7 @@ html, body {
   transition: left 0.4s cubic-bezier(0.4, 0.2, 0.2, 1);
 }
 
-/* ── Sidebar Toggle Button ─────────────────────────────────── */
+/* â”€â”€ Sidebar Toggle Button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .sidebar-toggle {
   position: fixed;
   right: -14px;
@@ -97,7 +97,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
   transform: translateY(-50%) rotate(180deg);
 }
 
-/* ── Sidebar ──────────────────────────────────────────────── */
+/* â”€â”€ Sidebar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 /* Sidebar collapse animation */
 #sidebar {
   position: absolute;
@@ -131,7 +131,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
 #sidebar::-webkit-scrollbar-track { background: transparent; }
 #sidebar::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
-/* ── Floating Search Button (injected into top-right MapLibre control group - visible when sidebar collapsed) ── */
+/* â”€â”€ Floating Search Button (injected into top-right MapLibre control group - visible when sidebar collapsed) â”€â”€ */
 .search-fab-btn {
   width: 29px !important;
   height: 29px !important;
@@ -154,7 +154,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
   pointer-events: none !important;
 }
 
-/* ── Search Section ───────────────────────────────────────── */
+/* â”€â”€ Search Section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .search-section {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -285,7 +285,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
 }
 .search-error { color: var(--red); }
 
-/* ── Brand ────────────────────────────────────────────────── */
+/* â”€â”€ Brand â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 #brand {
   display: flex;
   align-items: center;
@@ -318,7 +318,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
   margin-top: 1px;
 }
 
-/* ── Tab bar ──────────────────────────────────────────────── */
+/* â”€â”€ Tab bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 #tab-bar {
   display: flex;
   border-bottom: 1px solid var(--border);
@@ -342,7 +342,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
 .tab:hover  { color: var(--text); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
-/* ── Tab panels ───────────────────────────────────────────── */
+/* â”€â”€ Tab panels â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .tab-panel {
   display: none;
   flex-direction: column;
@@ -352,7 +352,7 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
 }
 .tab-panel.active { display: flex; }
 
-/* ── Typography helpers ───────────────────────────────────── */
+/* â”€â”€ Typography helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .instruction {
   font-size: 0.72rem;
   color: var(--text-dim);
@@ -369,13 +369,13 @@ label {
   margin-bottom: 6px;
 }
 
-/* ── Field row ────────────────────────────────────────────── */
+/* â”€â”€ Field row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .field-row {
   display: flex;
   flex-direction: column;
 }
 
-/* ── Segmented group ──────────────────────────────────────── */
+/* â”€â”€ Segmented group â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .seg-group {
   display: flex;
   gap: 4px;
@@ -412,7 +412,7 @@ label {
   margin-top: 1px;
 }
 
-/* ── Range input ──────────────────────────────────────────── */
+/* â”€â”€ Range input â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
@@ -426,7 +426,7 @@ input[type="range"] {
   color: var(--accent);
 }
 
-/* ── Button row ───────────────────────────────────────────── */
+/* â”€â”€ Button row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .btn-row {
   display: flex;
   gap: 6px;
@@ -470,7 +470,7 @@ input[type="range"] {
 }
 .btn-ghost:hover { border-color: var(--red); color: var(--red); }
 
-/* ── Pick status ──────────────────────────────────────────── */
+/* â”€â”€ Pick status â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .route-pick-container {
   display: flex;
   align-items: center; /* Vertically centers the swap button relative to the box */
@@ -539,7 +539,7 @@ input[type="range"] {
   background: var(--accent-glow);
 }
 
-/* ── Mono stat ────────────────────────────────────────────── */
+/* â”€â”€ Mono stat â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .mono-stat {
   font-family: var(--font-mono);
   font-size: 0.7rem;
@@ -548,7 +548,7 @@ input[type="range"] {
   line-height: 1.5;
 }
 
-/* ── Timer bar ────────────────────────────────────────────── */
+/* â”€â”€ Timer bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .timer-bar {
   height: 3px;
   background: var(--border2);
@@ -564,7 +564,7 @@ input[type="range"] {
   border-radius: 2px;
 }
 
-/* ── Legend ───────────────────────────────────────────────── */
+/* â”€â”€ Legend â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .legend {
   display: flex;
   flex-direction: column;
@@ -600,7 +600,7 @@ input[type="range"] {
   text-align: right;
 }
 
-/* ── Facility-specific: result card in legend ─────────────── */
+/* â”€â”€ Facility-specific: result card in legend â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .fac-item {
   display: flex;
   align-items: flex-start;
@@ -632,7 +632,7 @@ input[type="range"] {
 .fac-name { font-size: 0.73rem; color: var(--text); font-weight: 500; }
 .fac-meta { font-size: 0.65rem; color: var(--text-dim); margin-top: 1px; }
 
-/* ── Status bar ───────────────────────────────────────────── */
+/* â”€â”€ Status bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 #status-bar {
   padding: 10px 14px;
   font-size: 0.72rem;
@@ -656,7 +656,7 @@ input[type="range"] {
   0%,100% { opacity: 1; } 50% { opacity: 0.7; }
 }
 
-/* ── Stop / route markers ─────────────────────────────────── */
+/* â”€â”€ Stop / route markers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .stop-marker {
   width: 24px; height: 24px;
   border-radius: 50%;
@@ -708,7 +708,7 @@ input[type="range"] {
   pointer-events: none;
 }
 
-/* ── Layer switcher ───────────────────────────────────────── */
+/* â”€â”€ Layer switcher â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .layer-switcher { display: flex; flex-direction: column; }
 .layer-switcher button {
   width: 62px !important; height: 28px !important;
@@ -729,7 +729,7 @@ input[type="range"] {
 .layer-switcher button.active,
 .layer-switcher button:hover { background: #e0f2fe !important; color: #0369a1 !important; }
 
-/* ── Info Pointer Button ──────────────────────────────────── */
+/* â”€â”€ Info Pointer Button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .info-pointer-btn {
   width: 29px !important; height: 29px !important;
   background: white !important;
@@ -744,7 +744,7 @@ input[type="range"] {
 .info-pointer-btn:hover { background: #f0f9ff !important; }
 .info-pointer-btn.active { background: #3b82f6 !important; }
 
-/* ── Feature Info Panel (info pointer) ───────────────────── */
+/* â”€â”€ Feature Info Panel (info pointer) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .feature-info-panel {
   position: fixed;
   top: 1rem;
@@ -841,7 +841,7 @@ input[type="range"] {
   max-width: 55%;
 }
 
-/* ── MapLibre popup tweaks ────────────────────────────────── */
+/* â”€â”€ MapLibre popup tweaks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .maplibregl-popup-content {
   background: var(--surface2);
   color: var(--text);
@@ -863,7 +863,7 @@ input[type="range"] {
 #map.info-mode { cursor: crosshair; }
 #map.info-mode .maplibregl-canvas-container { cursor: crosshair; }
 
-/* ── Responsive ───────────────────────────────────────────── */
+/* â”€â”€ Responsive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 640px) {
   :root { --sidebar-w: 100%; }
   #map  { top: 240px; left: 0; bottom: 0; }

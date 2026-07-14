@@ -704,9 +704,6 @@ def get_tsp_route(body: TSPRequest):
 # ENDPOINT: GET /nearest_facility
 # ===========================================================================
 
-_ALLOWED_FACILITY_TYPES = frozenset({"hospital", "fire station", "police", "clinic"})
-
-
 @app.get("/nearest_facility", summary="Find and route to nearest POIs")
 def nearest_facility(
     lon:            Annotated[float, Query(ge=-180, le=180)],

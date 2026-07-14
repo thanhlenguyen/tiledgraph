@@ -1,0 +1,122 @@
+# ==================== GLOBAL SETTINGS ====================
+
+# Connection keep alive timeout
+keep_alive: 75
+
+# The socket address to bind
+listen_addresses: '0.0.0.0:3000'
+
+# Base path for TileJSON URLs and routes (set if behind a reverse proxy)
+base_path: null
+# route_prefix: null  # Alternative for full API prefix
+
+# Preferred compression (brotli is generally better)
+preferred_encoding: brotli
+
+web_ui: enable-for-all
+
+# Worker processes 
+worker_processes: 8
+
+# Cache configuration - increased and modernized
+cache:
+  size_mb: 1024          # Your original cache_size_mb
+  tile_size_mb: 512      # Roughly 50% for tiles
+  # Finer control available if needed:
+  # expiry: null
+  # idle_timeout: null
+  # minzoom: null
+  # maxzoom: null
+
+# Global MVT <-> MLT conversion (new powerful feature for better performance)
+convert_to_mlt: auto     # Recommended default
+convert_to_mvt: auto
+
+# CORS - your original allowed everything
+cors:
+  origin:
+    - "*"
+  max_age: 3600
+
+# Observability
+observability:
+  metrics:
+    add_labels: {}
+
+# Invalid sources handling (newer, safer default)
+on_invalid: warn
+
+# ==================== POSTGRES ====================
+
+postgres:
+  connection_string: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB}?sslmode=disable 
+  default_srid: 4326
+
+  # Auto-publish configuration (modernized from your old settings)
+  auto_publish:
+    tables:
+      from_schemas:
+        - topology
+      source_id_format: '{schema}.{table}'
+      id_columns: [id]           # Note: now a list
+      clip_geom: true
+      buffer: 64
+      extent: 4096
+
+  # Additional modern options
+  auto_bounds: quick           # Good balance
+  pool_size: 20
+  reload_interval: 10m         # Auto-reload new tables/functions
+
+# ==================== PMTILES ====================
+
+pmtiles:
+  # Directory cache (part of the new cache system)
+  directory_cache:
+    size_mb: 128               # Your original pmtiles.directory_cache_size_mb
+
+  allow_http: true
+  convert_to_mlt: auto
+
+  paths:
+    - /pmtiles
+  # sources:                     # Uncomment and configure if using named sources
+  #   administrative: /pmtiles/administrative.pmtiles
+  #   ...
+
+# ==================== MBTILES ====================
+
+mbtiles:
+  paths: []
+  # sources: {}                  # Named sources if needed
+  convert_to_mlt: auto
+
+# ==================== SPRITES & FONTS ====================
+
+sprites:
+  cache:
+    size_mb: 64
+  paths:
+    - /sprites
+  # sources: {}
+
+fonts:
+  cache:
+    size_mb: 64
+  paths:
+    - /fonts
+  # sources: {}
+
+# ==================== STYLES ====================
+
+styles:
+  paths:
+    - /styles
+  # sources:
+  #   basic-style: /styles/style.json
+  #   ...
+  rendering:
+    enabled: false             # Experimental server-side rendering
+
+# TileJSON version parameter for better CDN caching (new feature)
+tilejson_url_version_param: version
