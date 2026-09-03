@@ -1,0 +1,82 @@
+2026-08-31 04:35:06 [WARNING ] Input file is on a Windows drive (slow in WSL). For better performance, copy it first:
+  cp "data/riyadh.gpkg" ~/tiledgraph/data/
+2026-08-31 04:35:06 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:35:06 [INFO    ] Input         → /mnt/d/git/tiledgraph/data/riyadh.gpkg
+2026-08-31 04:35:06 [INFO    ] Output        → /mnt/d/git/tiledgraph/data/riyadh.osm
+2026-08-31 04:35:06 [INFO    ] DuckDB file   → /tmp/riyadh.duckdb  (deleted on success)
+2026-08-31 04:35:06 [INFO    ] RAM limit     : 16 GB
+2026-08-31 04:35:06 [INFO    ] Coord rounding: 7 digits  (~1.1 cm at equator)
+2026-08-31 04:35:06 [INFO    ] Snap N→N tight: 0.00002° (~2 m)
+2026-08-31 04:35:06 [INFO    ] Snap N→N wide : 0.00005° (~6 m)
+2026-08-31 04:35:06 [INFO    ] Snap P→node   : 0.000020° (~2.2 m — square box)
+2026-08-31 04:35:06 [INFO    ] Snap P→edge   : 0.00005° (~6 m — circle check)
+2026-08-31 04:35:06 [INFO    ] Log file      → /mnt/d/git/tiledgraph/build_osm_topology_20260831_043506.log
+2026-08-31 04:35:06 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:35:06 [INFO    ] ━━  Step 1 · Ingest source data ...
+2026-08-31 04:35:06 [INFO    ]    Input format: GDAL (st_read)
+2026-08-31 04:35:16 [INFO    ] Raw rows ingested: 247,207  [10.3s]
+2026-08-31 04:35:16 [WARNING ] pkStreetID has 13,606 duplicate values — surrogate id (ROW_NUMBER) used as primary key, safe to continue
+2026-08-31 04:35:16 [INFO    ] 🔧  Step 2 · Validate, repair, explode geometries ...
+2026-08-31 04:35:18 [INFO    ] Parts: 248,764 total → 248,764 kept  (dropped: vtx_cap=0  invalid=0)  [1.7s]
+2026-08-31 04:35:18 [INFO    ] Geometry types: [('LINESTRING', 248764)]
+2026-08-31 04:35:18 [INFO    ] 📌  Step 3 · Extract vertices, round, deduplicate nodes …
+2026-08-31 04:35:20 [INFO    ] Vertices: 2,999,802 total → 2,639,659 unique nodes  (12.0% shared between roads)  [2.6s]
+2026-08-31 04:35:20 [INFO    ] 🔗  Step 4 · Build way_nodes …
+2026-08-31 04:35:21 [INFO    ] Ways (raw): 247,207  [0.3s]
+2026-08-31 04:35:21 [INFO    ] 🔗  Step 5 · Build edges (road attributes) …
+2026-08-31 04:35:21 [INFO    ] Edges: 248,764  [0.2s]
+2026-08-31 04:35:21 [INFO    ] ━━  Step 6 · Topology validation …
+2026-08-31 04:35:21 [WARNING ] Removed 1,625 consecutive duplicate node refs
+2026-08-31 04:35:21 [INFO    ] After validation — nodes: 2,639,659  ways: 247,207  [0.5s]
+2026-08-31 04:35:21 [INFO    ] ━━  Step 7a · Node-to-node snap …
+2026-08-31 04:35:22 [INFO    ]   [pass1-all-ep] candidates: 451,726  tol=0.00002°
+2026-08-31 04:35:22 [INFO    ]   [pass1-all-ep] snap pairs found: 3,824
+2026-08-31 04:35:22 [DEBUG   ]     union-find iter 1: 3801 changes
+2026-08-31 04:35:22 [DEBUG   ]     union-find iter 2: 19 changes
+2026-08-31 04:35:22 [DEBUG   ]     union-find iter 3: 0 changes
+2026-08-31 04:35:22 [INFO    ]     union-find converged in 3 iterations
+2026-08-31 04:35:22 [INFO    ]   [pass1-all-ep] merging 7,565 nodes → 3,764 clusters
+2026-08-31 04:35:22 [INFO    ]   [pass1-all-ep] nodes: 2,639,659 → 2,635,858  (merged 3,801)
+2026-08-31 04:35:23 [INFO    ]   [pass2-dangle] candidates: 412,064  tol=0.00005°
+2026-08-31 04:35:23 [INFO    ]   [pass2-dangle] snap pairs found: 5,600
+2026-08-31 04:35:23 [DEBUG   ]     union-find iter 1: 5591 changes
+2026-08-31 04:35:23 [DEBUG   ]     union-find iter 2: 60 changes
+2026-08-31 04:35:23 [DEBUG   ]     union-find iter 3: 0 changes
+2026-08-31 04:35:23 [INFO    ]     union-find converged in 3 iterations
+2026-08-31 04:35:23 [INFO    ]   [pass2-dangle] merging 11,113 nodes → 5,522 clusters
+2026-08-31 04:35:24 [INFO    ]   [pass2-dangle] nodes: 2,635,858 → 2,630,267  (merged 5,591)
+2026-08-31 04:35:24 [WARNING ]   Removed 5,705 consecutive duplicate node refs
+2026-08-31 04:35:24 [WARNING ]   Dropped 36 degenerate ways
+2026-08-31 04:35:24 [INFO    ]   Node-to-node snap complete  [2.9s]
+2026-08-31 04:35:24 [INFO    ] After node-snap — nodes: 2,630,267  ways: 247,171
+2026-08-31 04:35:24 [INFO    ] ━━  Step 7b · Point-to-edge snap …
+2026-08-31 04:35:24 [INFO    ]   Dangling endpoints (before edge snap): 400,960
+2026-08-31 04:35:24 [INFO    ]   [Step A] dangling → nearest node  bbox=0.000020° (~2.2 m)
+2026-08-31 04:35:24 [INFO    ]   [Step A] building ALL endpoint pool …
+2026-08-31 04:35:25 [INFO    ]   [Step A] total endpoint pool: 442,323 nodes
+2026-08-31 04:35:25 [INFO    ]   [Step A] scanning 400,960 dangling endpoints in batches of 50,000 …
+2026-08-31 04:37:37 [INFO    ]   [Step A] pairs found: 0
+2026-08-31 04:37:37 [INFO    ]   [Step B] endpoint→edge  tol=0.00005° (~6 m)
+2026-08-31 04:37:37 [INFO    ]   [Step B] remaining dangling endpoints: 400,960
+2026-08-31 04:37:37 [INFO    ]   [Step B] building segment index ...
+2026-08-31 04:37:39 [INFO    ]   [Step B] segments indexed: 2,738,948
+2026-08-31 04:37:39 [INFO    ]   [Step B] projecting dangling endpoints onto segments …
+2026-08-31 04:38:39 [INFO    ]   [Step B] projection matches: 89,744
+2026-08-31 04:38:39 [INFO    ]   [Step B] splitting 89,744 segments …
+2026-08-31 04:38:40 [INFO    ]   [Step B] remapping dangling endpoints …
+2026-08-31 04:38:40 [WARNING ]   [Step B] removed 25 duplicate node refs
+2026-08-31 04:38:40 [INFO    ]   Point-to-edge snap complete — nodes: 2,659,793  ways: 247,171  [3.3m]
+2026-08-31 04:38:40 [INFO    ] After edge-snap — nodes: 2,659,793  ways: 247,171
+2026-08-31 04:38:40 [INFO    ] ━━  Step 8 · Writing OSM XML → /mnt/d/git/tiledgraph/data/riyadh.osm …
+2026-08-31 04:38:40 [INFO    ] Loading way attributes into memory …
+2026-08-31 04:38:40 [INFO    ] Loaded 247,171 way attribute records  [0.2s]
+2026-08-31 04:38:40 [INFO    ] Writing 2,659,793 nodes …
+2026-08-31 04:39:02 [DEBUG   ] 2,000,000 nodes written
+2026-08-31 04:39:07 [INFO    ] Nodes done: 2,659,793  [26.9s]
+2026-08-31 04:39:07 [INFO    ] Writing 247,171 ways …
+2026-08-31 04:39:20 [INFO    ] Ways written: 247,171  skipped: 0  [13.1s]
+2026-08-31 04:39:21 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:39:21 [INFO    ] Pipeline complete in 4.2m
+2026-08-31 04:39:21 [INFO    ] Output OSM   → /mnt/d/git/tiledgraph/data/riyadh.osm
+2026-08-31 04:39:21 [INFO    ] Next step    → osmium cat /mnt/d/git/tiledgraph/data/riyadh.osm -o output.osm.pbf
+2026-08-31 04:39:21 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

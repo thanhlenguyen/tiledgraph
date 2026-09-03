@@ -1,0 +1,83 @@
+2026-08-31 04:39:51 [WARNING ] Input file is on a Windows drive (slow in WSL). For better performance, copy it first:
+  cp "data/qassim.gpkg" ~/tiledgraph/data/
+2026-08-31 04:39:51 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:39:51 [INFO    ] Input         → /mnt/d/git/tiledgraph/data/qassim.gpkg
+2026-08-31 04:39:51 [INFO    ] Output        → /mnt/d/git/tiledgraph/data/qassim.osm
+2026-08-31 04:39:51 [INFO    ] DuckDB file   → /tmp/qassim.duckdb  (deleted on success)
+2026-08-31 04:39:51 [INFO    ] RAM limit     : 16 GB
+2026-08-31 04:39:51 [INFO    ] Coord rounding: 7 digits  (~1.1 cm at equator)
+2026-08-31 04:39:51 [INFO    ] Snap N→N tight: 0.00002° (~2 m)
+2026-08-31 04:39:51 [INFO    ] Snap N→N wide : 0.00005° (~6 m)
+2026-08-31 04:39:51 [INFO    ] Snap P→node   : 0.000020° (~2.2 m — square box)
+2026-08-31 04:39:51 [INFO    ] Snap P→edge   : 0.00005° (~6 m — circle check)
+2026-08-31 04:39:51 [INFO    ] Log file      → /mnt/d/git/tiledgraph/build_osm_topology_20260831_043951.log
+2026-08-31 04:39:51 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:39:51 [INFO    ] ━━  Step 1 · Ingest source data ...
+2026-08-31 04:39:51 [INFO    ]    Input format: GDAL (st_read)
+2026-08-31 04:39:54 [INFO    ] Raw rows ingested: 81,937  [2.7s]
+2026-08-31 04:39:54 [WARNING ] pkStreetID has 7,634 duplicate values — surrogate id (ROW_NUMBER) used as primary key, safe to continue
+2026-08-31 04:39:54 [INFO    ] 🔧  Step 2 · Validate, repair, explode geometries ...
+2026-08-31 04:39:55 [INFO    ] Parts: 82,493 total → 82,493 kept  (dropped: vtx_cap=0  invalid=0)  [0.8s]
+2026-08-31 04:39:55 [INFO    ] Geometry types: [('LINESTRING', 82493)]
+2026-08-31 04:39:55 [INFO    ] 📌  Step 3 · Extract vertices, round, deduplicate nodes …
+2026-08-31 04:39:55 [INFO    ] Vertices: 1,049,818 total → 975,486 unique nodes  (7.1% shared between roads)  [0.8s]
+2026-08-31 04:39:55 [INFO    ] 🔗  Step 4 · Build way_nodes …
+2026-08-31 04:39:56 [INFO    ] Ways (raw): 81,937  [0.1s]
+2026-08-31 04:39:56 [INFO    ] 🔗  Step 5 · Build edges (road attributes) …
+2026-08-31 04:39:56 [INFO    ] Edges: 82,493  [0.1s]
+2026-08-31 04:39:56 [INFO    ] ━━  Step 6 · Topology validation …
+2026-08-31 04:39:56 [WARNING ] Removed 562 consecutive duplicate node refs
+2026-08-31 04:39:56 [WARNING ] Dropped 4 degenerate ways (fewer than 2 distinct nodes)
+2026-08-31 04:39:56 [INFO    ] After validation — nodes: 975,486  ways: 81,933  [0.2s]
+2026-08-31 04:39:56 [INFO    ] ━━  Step 7a · Node-to-node snap …
+2026-08-31 04:39:56 [INFO    ]   [pass1-all-ep] candidates: 150,714  tol=0.00002°
+2026-08-31 04:39:56 [INFO    ]   [pass1-all-ep] snap pairs found: 1,529
+2026-08-31 04:39:56 [DEBUG   ]     union-find iter 1: 1515 changes
+2026-08-31 04:39:56 [DEBUG   ]     union-find iter 2: 4 changes
+2026-08-31 04:39:56 [DEBUG   ]     union-find iter 3: 0 changes
+2026-08-31 04:39:56 [INFO    ]     union-find converged in 3 iterations
+2026-08-31 04:39:56 [INFO    ]   [pass1-all-ep] merging 3,012 nodes → 1,497 clusters
+2026-08-31 04:39:56 [INFO    ]   [pass1-all-ep] nodes: 975,486 → 973,971  (merged 1,515)
+2026-08-31 04:39:56 [INFO    ]   [pass2-dangle] candidates: 137,468  tol=0.00005°
+2026-08-31 04:39:56 [INFO    ]   [pass2-dangle] snap pairs found: 2,073
+2026-08-31 04:39:56 [DEBUG   ]     union-find iter 1: 2070 changes
+2026-08-31 04:39:57 [DEBUG   ]     union-find iter 2: 25 changes
+2026-08-31 04:39:57 [DEBUG   ]     union-find iter 3: 1 changes
+2026-08-31 04:39:57 [DEBUG   ]     union-find iter 4: 0 changes
+2026-08-31 04:39:57 [INFO    ]     union-find converged in 4 iterations
+2026-08-31 04:39:57 [INFO    ]   [pass2-dangle] merging 4,115 nodes → 2,045 clusters
+2026-08-31 04:39:57 [INFO    ]   [pass2-dangle] nodes: 973,971 → 971,901  (merged 2,070)
+2026-08-31 04:39:57 [WARNING ]   Removed 1,524 consecutive duplicate node refs
+2026-08-31 04:39:57 [WARNING ]   Dropped 13 degenerate ways
+2026-08-31 04:39:57 [INFO    ]   Node-to-node snap complete  [1.3s]
+2026-08-31 04:39:57 [INFO    ] After node-snap — nodes: 971,901  ways: 81,920
+2026-08-31 04:39:57 [INFO    ] ━━  Step 7b · Point-to-edge snap …
+2026-08-31 04:39:57 [INFO    ]   Dangling endpoints (before edge snap): 133,360
+2026-08-31 04:39:57 [INFO    ]   [Step A] dangling → nearest node  bbox=0.000020° (~2.2 m)
+2026-08-31 04:39:57 [INFO    ]   [Step A] building ALL endpoint pool …
+2026-08-31 04:39:57 [INFO    ]   [Step A] total endpoint pool: 147,124 nodes
+2026-08-31 04:39:57 [INFO    ]   [Step A] scanning 133,360 dangling endpoints in batches of 50,000 …
+2026-08-31 04:40:53 [INFO    ]   [Step A] pairs found: 0
+2026-08-31 04:40:53 [INFO    ]   [Step B] endpoint→edge  tol=0.00005° (~6 m)
+2026-08-31 04:40:53 [INFO    ]   [Step B] remaining dangling endpoints: 133,360
+2026-08-31 04:40:53 [INFO    ]   [Step B] building segment index ...
+2026-08-31 04:40:54 [INFO    ]   [Step B] segments indexed: 963,963
+2026-08-31 04:40:54 [INFO    ]   [Step B] projecting dangling endpoints onto segments …
+2026-08-31 04:41:01 [INFO    ]   [Step B] projection matches: 67,227
+2026-08-31 04:41:01 [INFO    ]   [Step B] splitting 67,227 segments …
+2026-08-31 04:41:01 [INFO    ]   [Step B] remapping dangling endpoints …
+2026-08-31 04:41:02 [WARNING ]   [Step B] removed 10 duplicate node refs
+2026-08-31 04:41:02 [INFO    ]   Point-to-edge snap complete — nodes: 995,686  ways: 81,920  [1.1m]
+2026-08-31 04:41:02 [INFO    ] After edge-snap — nodes: 995,686  ways: 81,920
+2026-08-31 04:41:02 [INFO    ] ━━  Step 8 · Writing OSM XML → /mnt/d/git/tiledgraph/data/qassim.osm …
+2026-08-31 04:41:02 [INFO    ] Loading way attributes into memory …
+2026-08-31 04:41:02 [INFO    ] Loaded 81,920 way attribute records  [0.1s]
+2026-08-31 04:41:02 [INFO    ] Writing 995,686 nodes …
+2026-08-31 04:41:10 [INFO    ] Nodes done: 995,686  [8.7s]
+2026-08-31 04:41:10 [INFO    ] Writing 81,920 ways …
+2026-08-31 04:41:16 [INFO    ] Ways written: 81,920  skipped: 0  [5.1s]
+2026-08-31 04:41:16 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2026-08-31 04:41:16 [INFO    ] Pipeline complete in 1.4m
+2026-08-31 04:41:16 [INFO    ] Output OSM   → /mnt/d/git/tiledgraph/data/qassim.osm
+2026-08-31 04:41:16 [INFO    ] Next step    → osmium cat /mnt/d/git/tiledgraph/data/qassim.osm -o output.osm.pbf
+2026-08-31 04:41:16 [INFO    ] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

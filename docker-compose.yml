@@ -24,7 +24,7 @@ services:
       retries: 10
 
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.1
     container_name: elasticsearch
     restart: unless-stopped
     environment:
@@ -52,7 +52,7 @@ services:
       nofile: 65536
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:9.4.3
+    image: docker.elastic.co/kibana/kibana:9.5.1
     container_name: kibana
     restart: unless-stopped
     ports:
@@ -72,7 +72,7 @@ services:
       retries: 5    
 
   martin:
-    image: ghcr.io/maplibre/martin:1.11.0
+    image: ghcr.io/maplibre/martin:1.15.0
     container_name: martin_server
     restart: unless-stopped
     env_file:
@@ -161,7 +161,7 @@ services:
       retries: 5
 
   pgadmin:
-    image: dpage/pgadmin4:9.16
+    image: dpage/pgadmin4:9.17
     container_name: pgadmin4
     restart: always
     env_file: 
@@ -175,7 +175,7 @@ services:
       - postgis
 
   nginx:
-    image: nginx:latest
+    image: nginx:alpine
     container_name: nginx
     restart: always
     ports:

@@ -56,6 +56,9 @@ df = pl.read_database(
             {table_schema}.{building} as b 
             Full Join {table_schema}.{floor} as f 
             ON b.fkShortAddress = f.fkShortAddress
+
+        WHERE 
+            b.BuildingUseType <> 'Residential';
     """
     ,connection=engine, 
 )
@@ -82,7 +85,7 @@ convert_query = f"""
             Building_Type,
             CAST(
                 CASE 
-                    WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3.5 
+                    WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3
                     ELSE FloorsAboveGround * 5
                 END 
                 AS FLOAT)

@@ -1,80 +1,163 @@
-async function zoomToFeature(feature, clickedElement) {
-    if (!state.map) {
-        console.warn('Map not ready');
-        return;
+@app.get("/nearest_facility_es", tags=["Facility"])
+async def nearest_facility_es(
+    lon:             Annotated[float, Query(ge=-180, le=180)],
+    lat:             Annotated[float, Query(ge=-90,  le=90)],
+    type:            str   = "hospital",
+    limit:           Annotated[int,   Query(ge=1, le=10)]   = 5,
+    max_distance_km: Annotated[float, Query(ge=1, le=20)]   = 5.0,
+    routes:          bool  = True,
+):
+    """
+    Find the nearest facilities using Elasticsearch, then route to each one.
+
+    ALGORITHM (3 steps — identical contract to /nearest_facility_pg)
+    ─────────────────────────────────────────────────────────────────
+    1. ES geo_distance filter: find candidates within max_distance_km.
+       Sorted by crow-fly distance so Valhalla matrix gets the best candidates.
+    2. Valhalla matrix: one HTTP call ranks all candidates by actual drive time.
+    3. Valhalla /route (concurrent): fetch turn-by-turn geometry in parallel.
+
+    The response shape is identical to /nearest_facility_pg so the frontend
+    does not need to know which backend was used.
+    """
+    facility_type = type.lower().strip()
+    if facility_type not in _ALLOWED_FACILITY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"type must be one of: {', '.join(sorted(_ALLOWED_FACILITY_TYPES))}.",
+        )
+
+    # ── Step 1: Elasticsearch geo_distance query ─────────────────────────────
+    #
+    # We use a bool/filter query (no scoring) with two clauses:
+    #   geo_distance  — only return documents within the search radius
+    #   term          — only return documents of the requested facility type
+    #
+    # The _geo_distance sort returns the crow-fly distance in km as sort[0]
+    # for each hit, which we expose as crow_distance_km in the response.
+    es_query = {
+        "size": limit * CANDIDATE_MULTIPLIER,
+        "query": {
+            "bool": {
+                "filter": [
+                    {
+                        # Spatial filter: "geometry" is the geo_point field.
+                        "geo_distance": {
+                            "distance": f"{max_distance_km}km",
+                            "geometry": {"lat": lat, "lon": lon},
+                        }
+                    },
+                    {
+                        # Type filter: data is nested under "properties.type".
+                        # Using .keyword subfield for exact, case-sensitive match.
+                        # facility_type is already lowercased by the whitelist check above.
+                        "term": {"properties.type.keyword": facility_type}
+                    },
+                ]
+            }
+        },
+        "sort": [
+            {
+                # Sort by crow-fly distance ascending.
+                # The sort value (in km) is returned as sort[0] in each hit.
+                "_geo_distance": {
+                    "geometry":      {"lat": lat, "lon": lon},
+                    "order":         "asc",
+                    "unit":          "km",
+                    "distance_type": "arc",   # most accurate; use "plane" for speed
+                }
+            }
+        ],
+        # Only fetch the fields we need — keeps network transfer small
+        "_source": ["geometry", "properties"],
     }
 
-    // Clear previous highlights and mark new selection
-    clearHighlight();
-    clickedElement.classList.add('active');
+    try:
+        es_resp = await client.post(
+            f"{ES_URL}/{ES_FACILITY_INDEX}/_search",
+            json=es_query,
+            timeout=15.0,
+        )
+    except httpx.RequestError as exc:
+        logger.error("Elasticsearch unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="Search service unavailable.")
 
-    // Validate geometry
-    if (!feature.geometry) {
-        alert('No geometry available for this feature.');
-        return;
+    if es_resp.status_code != 200:
+        logger.error("ES error %d: %s", es_resp.status_code, es_resp.text[:400])
+        raise HTTPException(status_code=502, detail="Search service returned an error.")
+
+    hits = es_resp.json().get("hits", {}).get("hits", [])
+    if not hits:
+        return {"message": f"No {facility_type} found within {max_distance_km} km.",
+                "count": 0, "facilities": []}
+
+    # ── Parse ES hits into flat candidate dicts ──────────────────────────────
+    #
+    # Each hit looks like:
+    #   { "_id": "abc", "_source": { "geometry": {…}, "properties": {…} },
+    #     "sort": [1.23] }          ← sort[0] is the crow-fly distance in km
+    candidates = []
+    for hit in hits:
+        src   = hit.get("_source", {})
+        props = src.get("properties", {})   # name, type, address live here
+        loc   = src.get("geometry",   {})   # geo_point field
+
+        # Parse coordinates — geometry can arrive in three formats:
+        if isinstance(loc, str):
+            # "lat,lon" plain string
+            parts = loc.split(",")
+            f_lat, f_lon = float(parts[0].strip()), float(parts[1].strip())
+        elif "coordinates" in loc:
+            # GeoJSON object: coordinates = [longitude, latitude]  (note: lon first)
+            f_lon = float(loc["coordinates"][0])
+            f_lat = float(loc["coordinates"][1])
+        else:
+            # Flat ES geo_point: {"lat": …, "lon": …}
+            f_lat = float(loc.get("lat", 0))
+            f_lon = float(loc.get("lon", 0))
+
+        # sort[0] is the crow-fly distance in km returned by _geo_distance sort
+        sort_vals    = hit.get("sort", [None])
+        crow_dist_km = (
+            round(float(sort_vals[0]), 2)
+            if sort_vals and sort_vals[0] is not None
+            else round(_haversine_km(lat, lon, f_lat, f_lon), 2)
+        )
+
+        candidates.append({
+            "id":               hit.get("_id") or str(props.get("id", "")),
+            "name":             props.get("name") or props.get("name_ar") or "Unknown",
+            "type":             props.get("type", facility_type),
+            "address":          props.get("address") or props.get("address_ar") or "",
+            "facility_lat":     f_lat,
+            "facility_lon":     f_lon,
+            "crow_distance_km": crow_dist_km,
+        })
+
+    logger.info("ES: %d candidate(s) for type=%s within %.1f km",
+                len(candidates), facility_type, max_distance_km)
+
+    # ── Step 2: Rank by drive time ───────────────────────────────────────────
+    ranked = await _rank_by_travel_time(lon, lat, candidates, limit)
+    if not ranked:
+        return {"message": f"No routable {facility_type} found within {max_distance_km} km.",
+                "count": 0, "facilities": []}
+
+    # ── Step 3: Fetch route geometry (all facilities in parallel) ────────────
+    if routes:
+        route_results = await asyncio.gather(
+            *[_fetch_facility_route(lon, lat, f, i + 1) for i, f in enumerate(ranked)]
+        )
+        for entry, route_fc in zip(ranked, route_results):
+            entry["route"] = route_fc
+    else:
+        for entry in ranked:
+            entry["route"] = None
+
+    return {
+        "incident":         {"lon": lon, "lat": lat},
+        "type":             facility_type,
+        "search_radius_km": max_distance_km,
+        "count":            len(ranked),
+        "facilities":       ranked,
     }
-
-    // Calculate feature bounds
-    const bounds = new maplibregl.LngLatBounds();
-    const props = feature.properties || {};
-    const flattenCoords = (arr) => {
-        if (typeof arr[0] === 'number') {
-            bounds.extend([arr[0], arr[1]]);
-        } else {
-            arr.forEach(flattenCoords);
-        }
-    };
-    flattenCoords(feature.geometry.coordinates);
-    
-    if (bounds.isEmpty()) {
-        alert('No valid geometry found.');
-        return;
-    }
-
-    // Calculate popup position
-    const popupPosition = getPopupAnchorPosition(bounds);
-
-    // Build the popup HTML with the feature's attributes
-    let popupHTML = `
-        <div style="max-width:280px;font-size:14px;line-height:1.6;">
-            <strong style="font-size:16px;color:#1f2937;">
-                ${props.NAME || props.FloorUsage || props.UnitAddress || 'Feature'}
-            </strong><br>
-    `;
-
-    if (currentDataset === 'spl_units') {
-        popupHTML += `
-            <strong>Unit ID:</strong> ${props.UNIT_ID || '—'}<br>
-            <strong>Address:</strong> ${props.UnitVerticalAddress || 'N/A'}<br>
-            <strong>Floor:</strong> ${props.Base !== undefined ? props.Base.toFixed(2) + 'm' : 'N/A'}<br>
-            <strong>Height:</strong> ${props.HEIGHT !== undefined ? props.HEIGHT.toFixed(2) + 'm' : 'N/A'}<br>
-            <strong>Type:</strong> ${props.USE_TYPE || 'N/A'}
-        `;
-    } else {
-        popupHTML += `
-            <strong>ID:</strong> ${props.fkFloorGUID || props.UnitVerticalAddress || '—'}<br>
-            <strong>Address:</strong> ${props.UnitVerticalAddress || props.fkShortAddress || 'N/A'}<br>
-            <strong>Floor:</strong> ${props.FloorID ?? '—'}<br>
-            <strong>Usage:</strong> ${props.UseType || '—'}<br>
-            <strong>Type:</strong> ${props.Occupant || '—'}<br>
-            <strong>Total Floors:</strong> ${props.NoofFloors || '—'}<br>
-            <strong>Building Height:</strong> ${props.BuildingHeight ? props.BuildingHeight.toFixed(1) + 'm' : '—'}
-        `;
-    }
-    popupHTML += '</div>';
-
-    // Function to add highlight and animate camera
-    const afterStyleLoad = () => {
-        addHighlightAndAnimate(feature, bounds, popupPosition, popupHTML);
-    };
-
-    // Switch to 3D BDF style if not already active
-    const bdfStyle = STYLES.find(s => s.id === 'bdf-style');
-    if (currentStyleId !== 'bdf-style') {
-        state.map.setStyle(bdfStyle.url);
-        currentStyleId = 'bdf-style';
-        state.map.once('idle', afterStyleLoad);
-    } else {
-        afterStyleLoad();
-    }
-}

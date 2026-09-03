@@ -687,6 +687,9 @@ cd ~/valhalla-data
 # Prepare osm.pbf file as previous phase
 ```
 5. Create Configuration File (valhalla.json)
+This command creates a configuration file named valhalla.json.
+
+Valhalla needs this file to know where to put the data and where to find supporting files when building tiles and when running the routing service.   
 ```Bash
 mkdir -p valhalla_tiles
 
@@ -696,18 +699,19 @@ valhalla_build_config \
   --mjolnir-timezone ${PWD}/valhalla_tiles/timezones.sqlite \
   --mjolnir-admin ${PWD}/valhalla_tiles/admins.sqlite > valhalla.json
 ```
+![alt text](image.png)
 6. Build Supporting Files (Admins + Timezones) if needed
 ```Bash
 # Timezones
 valhalla_build_timezones > valhalla_tiles/timezones.sqlite
 
 # Admins (important for driving side, access, etc.)
-valhalla_build_admins -c valhalla.json switzerland-latest.osm.pbf
+valhalla_build_admins -c valhalla.json your-file.osm.pbf
 ```
 ### Step 2 Create *.tar file
 1. Build the Graph Tiles
 ```Bash
-valhalla_build_tiles -c valhalla.json switzerland-latest.osm.pbf
+valhalla_build_tiles -c valhalla.json your-file.osm.pbf
 ```
 This step creates the hierarchy folders (0/, 1/, 2/) with .gph files inside valhalla_tiles/.
 2. Create tiles.tar:
@@ -719,13 +723,25 @@ valhalla_build_extract -c valhalla.json -v
 - Copy the built files to your mounted volume (usually ./custom_files or similar on the host) 
 - Update the hash file (the scripted image uses this to detect changes):
 ```Bash
-cd /path/to/your/custom_files
-md5sum valhalla_tiles.tar > file_hashes.txt
+docker compose stop valhalla
+# Backup current working data (optional but safe)
+cp -r ~/data/pbf ~/data/pbf_backup_$(date +%Y%m%d)
+
+cd /path/to/your/valhalla-data
+
+cp valhalla_tiles.tar ~/data/pbf/
+cp valhalla.json ~/data/pbf/
+cp -r valhalla_tiles ~/data/pbf/
+cp valhalla_tiles/admins.sqlite ~/data/pbf/ 2>/dev/null || true
+cp valhalla_tiles/timezones.sqlite ~/data/pbf/ 2>/dev/null || true
+
 ```
 Restart the container with these environment variables:YAMLenvironment:
 ```bash
   - use_tiles_ignore_pbf=True
   - force_rebuild=False
   - build_tar=False
+
+  docker compose start valhalla
 ```
 The container should load the pre-built valhalla_tiles.tar quickly without rebuilding.
