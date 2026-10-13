@@ -1,5 +1,5 @@
-@app.get("/nearest_facility_es", tags=["Facility"])
-async def nearest_facility_es(
+@app.get("/nearest_facility_ts", tags=["Facility"])
+async def nearest_facility_ts(
     lon:             Annotated[float, Query(ge=-180, le=180)],
     lat:             Annotated[float, Query(ge=-90,  le=90)],
     type:            str   = "hospital",
@@ -8,17 +8,14 @@ async def nearest_facility_es(
     routes:          bool  = True,
 ):
     """
-    Find the nearest facilities using Elasticsearch, then route to each one.
+    Find the nearest facilities using Typesense, then route to each one.
 
-    ALGORITHM (3 steps — identical contract to /nearest_facility_pg)
-    ─────────────────────────────────────────────────────────────────
-    1. ES geo_distance filter: find candidates within max_distance_km.
-       Sorted by crow-fly distance so Valhalla matrix gets the best candidates.
+    ALGORITHM (3 steps — identical contract to /nearest_facility_pg and _es)
+    ─────────────────────────────────────────────────────────────────────────
+    1. Typesense geo filter: find candidates within max_distance_km,
+       sorted by crow-fly distance.
     2. Valhalla matrix: one HTTP call ranks all candidates by actual drive time.
     3. Valhalla /route (concurrent): fetch turn-by-turn geometry in parallel.
-
-    The response shape is identical to /nearest_facility_pg so the frontend
-    does not need to know which backend was used.
     """
     facility_type = type.lower().strip()
     if facility_type not in _ALLOWED_FACILITY_TYPES:
@@ -27,121 +24,91 @@ async def nearest_facility_es(
             detail=f"type must be one of: {', '.join(sorted(_ALLOWED_FACILITY_TYPES))}.",
         )
 
-    # ── Step 1: Elasticsearch geo_distance query ─────────────────────────────
+    def _empty(message: str) -> dict:
+        return {"incident": {"lon": lon, "lat": lat}, "type": facility_type,
+                "search_radius_km": max_distance_km, "count": 0,
+                "facilities": [], "message": message}
+
+    # ── Step 1: Typesense geo search ─────────────────────────────────────────
     #
-    # We use a bool/filter query (no scoring) with two clauses:
-    #   geo_distance  — only return documents within the search radius
-    #   term          — only return documents of the requested facility type
-    #
-    # The _geo_distance sort returns the crow-fly distance in km as sort[0]
-    # for each hit, which we expose as crow_distance_km in the response.
-    es_query = {
-        "size": limit * CANDIDATE_MULTIPLIER,
-        "query": {
-            "bool": {
-                "filter": [
-                    {
-                        # Spatial filter: "geometry" is the geo_point field.
-                        "geo_distance": {
-                            "distance": f"{max_distance_km}km",
-                            "geometry": {"lat": lat, "lon": lon},
-                        }
-                    },
-                    {
-                        # Type filter: data is nested under "properties.type".
-                        # Using .keyword subfield for exact, case-sensitive match.
-                        # facility_type is already lowercased by the whitelist check above.
-                        "term": {"properties.type.keyword": facility_type}
-                    },
-                ]
-            }
-        },
-        "sort": [
-            {
-                # Sort by crow-fly distance ascending.
-                # The sort value (in km) is returned as sort[0] in each hit.
-                "_geo_distance": {
-                    "geometry":      {"lat": lat, "lon": lon},
-                    "order":         "asc",
-                    "unit":          "km",
-                    "distance_type": "arc",   # most accurate; use "plane" for speed
-                }
-            }
-        ],
-        # Only fetch the fields we need — keeps network transfer small
-        "_source": ["geometry", "properties"],
+    # filter_by:
+    #   location:(lat, lon, R km)  — radius filter on the geopoint field
+    #   type:=`hospital`           — exact match; backticks escape special chars
+    # sort_by:
+    #   location(lat, lon):asc     — nearest first; distance comes back in
+    #                                hit["geo_distance_meters"]["location"]
+    ts_params = {
+        "q":         "*",
+        "query_by":  "name",
+        "filter_by": (
+            f"location:({lat}, {lon}, {max_distance_km} km) "
+            f"&& type:=`{facility_type}`"
+        ),
+        "sort_by":   f"location({lat}, {lon}):asc",
+        "per_page":  limit * CANDIDATE_MULTIPLIER,   # Typesense max is 250
+        "include_fields": "id,name,type,address,location",
     }
 
     try:
-        es_resp = await client.post(
-            f"{ES_URL}/{ES_FACILITY_INDEX}/_search",
-            json=es_query,
+        ts_resp = await client.get(
+            f"{TS_URL}/collections/{TS_FACILITY_COLLECTION}/documents/search",
+            params=ts_params,
+            headers={"X-TYPESENSE-API-KEY": TS_API_KEY},
             timeout=15.0,
         )
     except httpx.RequestError as exc:
-        logger.error("Elasticsearch unreachable: %s", exc)
+        logger.error("Typesense unreachable: %s", exc)
         raise HTTPException(status_code=503, detail="Search service unavailable.")
 
-    if es_resp.status_code != 200:
-        logger.error("ES error %d: %s", es_resp.status_code, es_resp.text[:400])
+    if ts_resp.status_code != 200:
+        logger.error("Typesense error %d: %s", ts_resp.status_code, ts_resp.text[:400])
         raise HTTPException(status_code=502, detail="Search service returned an error.")
 
-    hits = es_resp.json().get("hits", {}).get("hits", [])
+    hits = ts_resp.json().get("hits", [])
     if not hits:
-        return {"message": f"No {facility_type} found within {max_distance_km} km.",
-                "count": 0, "facilities": []}
+        return _empty(f"No {facility_type} found within {max_distance_km} km.")
 
-    # ── Parse ES hits into flat candidate dicts ──────────────────────────────
+    # ── Parse Typesense hits into flat candidate dicts ───────────────────────
     #
     # Each hit looks like:
-    #   { "_id": "abc", "_source": { "geometry": {…}, "properties": {…} },
-    #     "sort": [1.23] }          ← sort[0] is the crow-fly distance in km
+    #   { "document": {"id": "…", "name": "…", "location": [lat, lon], …},
+    #     "geo_distance_meters": {"location": 1234} }
     candidates = []
     for hit in hits:
-        src   = hit.get("_source", {})
-        props = src.get("properties", {})   # name, type, address live here
-        loc   = src.get("geometry",   {})   # geo_point field
+        doc = hit.get("document", {})
+        loc = doc.get("location")
+        if not loc or len(loc) != 2:
+            continue
 
-        # Parse coordinates — geometry can arrive in three formats:
-        if isinstance(loc, str):
-            # "lat,lon" plain string
-            parts = loc.split(",")
-            f_lat, f_lon = float(parts[0].strip()), float(parts[1].strip())
-        elif "coordinates" in loc:
-            # GeoJSON object: coordinates = [longitude, latitude]  (note: lon first)
-            f_lon = float(loc["coordinates"][0])
-            f_lat = float(loc["coordinates"][1])
-        else:
-            # Flat ES geo_point: {"lat": …, "lon": …}
-            f_lat = float(loc.get("lat", 0))
-            f_lon = float(loc.get("lon", 0))
+        f_lat, f_lon = float(loc[0]), float(loc[1])   # [lat, lon]
 
-        # sort[0] is the crow-fly distance in km returned by _geo_distance sort
-        sort_vals    = hit.get("sort", [None])
+        dist_m = hit.get("geo_distance_meters", {}).get("location")
         crow_dist_km = (
-            round(float(sort_vals[0]), 2)
-            if sort_vals and sort_vals[0] is not None
+            round(dist_m / 1000.0, 2)
+            if dist_m is not None
             else round(_haversine_km(lat, lon, f_lat, f_lon), 2)
         )
 
         candidates.append({
-            "id":               hit.get("_id") or str(props.get("id", "")),
-            "name":             props.get("name") or props.get("name_ar") or "Unknown",
-            "type":             props.get("type", facility_type),
-            "address":          props.get("address") or props.get("address_ar") or "",
+            "id":               doc.get("id", ""),
+            "name":             doc.get("name") or "Unknown",
+            "type":             doc.get("type", facility_type),
+            "address":          doc.get("address") or "",
             "facility_lat":     f_lat,
             "facility_lon":     f_lon,
             "crow_distance_km": crow_dist_km,
         })
 
-    logger.info("ES: %d candidate(s) for type=%s within %.1f km",
+    logger.info("Typesense: %d candidate(s) for type=%s within %.1f km",
                 len(candidates), facility_type, max_distance_km)
+
+    if not candidates:
+        return _empty(f"No {facility_type} found within {max_distance_km} km.")
 
     # ── Step 2: Rank by drive time ───────────────────────────────────────────
     ranked = await _rank_by_travel_time(lon, lat, candidates, limit)
     if not ranked:
-        return {"message": f"No routable {facility_type} found within {max_distance_km} km.",
-                "count": 0, "facilities": []}
+        return _empty(f"No routable {facility_type} found within {max_distance_km} km.")
 
     # ── Step 3: Fetch route geometry (all facilities in parallel) ────────────
     if routes:

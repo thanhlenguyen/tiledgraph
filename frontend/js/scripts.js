@@ -38,8 +38,9 @@ const API = {
     route:              `${BACKEND_URL}/route_val`,               // Valhalla turn-by-turn routing
     optimize:           `${BACKEND_URL}/optimize_route`,      // VROOM vehicle-route optimisation
     isochrone:          `${BACKEND_URL}/isochrone`,           // Valhalla reachability polygons
-    nearestFacility:    `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
-    nearestFacilityPg:  `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
+    nearestFacility:    `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
+    nearestFacilityES:  `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
+    nearestFacilityTS:  `${BACKEND_URL}/nearest_facility_ts`,    // Typesense + Valhalla
 };
 
 // How long (in milliseconds) to wait for an API response before giving up.
@@ -110,6 +111,9 @@ const state = {
         points:  [],     // [[lng,lat], [lng,lat]] — start and end
         markers: [],     // maplibregl.Marker[] — the S and E pins
         drawn:   [],     // [{ coordinates, color, dash }] — decoded route lines
+        animMarker: null,   // moving transport icon marker
+        animFrame:  null,   // requestAnimationFrame id
+        animating:  false,
     },
 
     // --- VRP / TSP ---
@@ -277,6 +281,10 @@ function restoreActiveLayers() {
     state.route.drawn.forEach((d, i) => {
         addRouteLayer(i, d.coordinates, d.color, d.dash);
     });
+    // Restart transport icon animation on the primary route after a style switch
+    if (state.route.drawn[0]?.coordinates?.length >= 2) {
+        startRouteAnimation(state.route.drawn[0].coordinates, state.route.profile);
+    }
 
     // VRP per-segment coloured lines
     state.vrp.drawnSegments.forEach(seg => {
@@ -297,6 +305,9 @@ function restoreActiveLayers() {
     if (state.infoPointerActive) {
         setupInfoPointerLayers();
     }
+
+    // Map assistant (agent.js) route & isochrone layers
+    window.agentRestoreLayers?.();
 }
 
 
@@ -501,6 +512,7 @@ window.routeClear = () => {
 /** Called only from switchTab — removes everything without touching mode state. */
 function routeFullClear() {
     exitMode();
+    stopRouteAnimation();
     routeRemoveLayers();
     state.route.drawn   = [];
     state.route.points  = [];
@@ -512,6 +524,7 @@ function routeFullClear() {
 
 /** Reset picks, clear map lines and markers, hide the legend. */
 function routeResetPicks() {
+    stopRouteAnimation();
     routeRemoveLayers();
     state.route.drawn   = [];
     state.route.points  = [];
@@ -650,6 +663,11 @@ async function runRouteComparison() {
     if (drawn > 0) {
         legendEl.classList.remove('hidden');
         setStatus(`✅ ${drawn} routes drawn. Legend shows distance and time.`, 'success');
+        // Animate transport icon along the primary (fastest) route
+        const primary = state.route.drawn[0];
+        if (primary?.coordinates?.length >= 2) {
+            startRouteAnimation(primary.coordinates, state.route.profile);
+        }
     } else {
         setStatus('No routes returned — are the points within the routable area?', 'error');
     }
@@ -657,6 +675,7 @@ async function runRouteComparison() {
 
 /** Remove all three route sources and layers from the map. */
 function routeRemoveLayers() {
+    stopRouteAnimation();
     [0, 1, 2].forEach(i => {
         if (state.map.getLayer(ROUTE_LYR(i)))  state.map.removeLayer(ROUTE_LYR(i));
         if (state.map.getSource(ROUTE_SRC(i))) state.map.removeSource(ROUTE_SRC(i));
@@ -691,6 +710,168 @@ function addRouteLayer(i, coordinates, color, dash) {
             'line-dasharray': dash,
         },
     });
+}
+
+
+// ---------------------------------------------------------------------------
+// Route animation — transport icon follows the primary route from A → B
+// ---------------------------------------------------------------------------
+
+/** Icon + speed (px-independent duration base) per transport profile. */
+const TRANSPORT_ICONS = {
+    auto:       { emoji: '🚗', durationMs: 8000 },
+    bicycle:    { emoji: '🚲', durationMs: 12000 },
+    pedestrian: { emoji: '🚶', durationMs: 16000 },
+};
+
+/**
+ * Stop any running route animation and remove the moving marker.
+ */
+function stopRouteAnimation() {
+    if (state.route.animFrame) {
+        cancelAnimationFrame(state.route.animFrame);
+        state.route.animFrame = null;
+    }
+    state.route.animating = false;
+    if (state.route.animMarker) {
+        state.route.animMarker.remove();
+        state.route.animMarker = null;
+    }
+}
+
+/**
+ * Create a styled DOM element for the moving transport icon.
+ * @param {string} emoji - Transport emoji
+ * @returns {HTMLElement}
+ */
+function makeAnimIconEl(emoji) {
+    const el = document.createElement('div');
+    el.className = 'route-anim-icon';
+    el.textContent = emoji;
+    el.style.cssText = `
+        font-size: 28px;
+        line-height: 1;
+        filter: drop-shadow(0 2px 6px rgba(0,0,0,0.55));
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        user-select: none;
+        will-change: transform;
+    `;
+    return el;
+}
+
+/**
+ * Linear interpolation between two [lng, lat] points.
+ */
+function lerpLngLat(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+}
+
+/**
+ * Build cumulative distance array along a polyline (in approximate metres).
+ * Used so the icon moves at constant speed rather than jumping per vertex.
+ * @param {Array} coords - [[lng,lat], ...]
+ * @returns {{ cumDist: number[], total: number }}
+ */
+function buildRouteDistances(coords) {
+    const cumDist = [0];
+    let total = 0;
+    for (let i = 1; i < coords.length; i++) {
+        const [lng1, lat1] = coords[i - 1];
+        const [lng2, lat2] = coords[i];
+        // Approximate metres using equirectangular projection (good enough for short routes)
+        const x = (lng2 - lng1) * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+        const y = lat2 - lat1;
+        const d = Math.sqrt(x * x + y * y) * 111320; // deg → metres
+        total += d;
+        cumDist.push(total);
+    }
+    return { cumDist, total };
+}
+
+/**
+ * Find the [lng, lat] at a given distance along the route.
+ * @param {Array}  coords  - polyline
+ * @param {Array}  cumDist - cumulative distances
+ * @param {number} dist    - target distance in metres
+ * @returns {Array} [lng, lat]
+ */
+function pointAtDistance(coords, cumDist, dist) {
+    if (dist <= 0) return coords[0];
+    if (dist >= cumDist[cumDist.length - 1]) return coords[coords.length - 1];
+
+    // Binary search for the segment
+    let lo = 0, hi = cumDist.length - 1;
+    while (lo < hi - 1) {
+        const mid = (lo + hi) >> 1;
+        if (cumDist[mid] < dist) lo = mid;
+        else hi = mid;
+    }
+    const segLen = cumDist[hi] - cumDist[lo];
+    const t = segLen > 0 ? (dist - cumDist[lo]) / segLen : 0;
+    return lerpLngLat(coords[lo], coords[hi], t);
+}
+
+/**
+ * Animate a transport icon along the given polyline coordinates.
+ * Icon and duration depend on the selected profile (car / bike / walk).
+ *
+ * @param {Array}  coordinates - [[lng,lat], ...] of the primary route
+ * @param {string} profile     - 'auto' | 'bicycle' | 'pedestrian'
+ */
+function startRouteAnimation(coordinates, profile) {
+    stopRouteAnimation();
+
+    if (!coordinates || coordinates.length < 2) return;
+
+    const cfg = TRANSPORT_ICONS[profile] || TRANSPORT_ICONS.auto;
+    const { cumDist, total } = buildRouteDistances(coordinates);
+    if (total < 1) return; // degenerate
+
+    const el = makeAnimIconEl(cfg.emoji);
+    const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(coordinates[0])
+        .addTo(state.map);
+
+    state.route.animMarker = marker;
+    state.route.animating  = true;
+
+    const duration = cfg.durationMs;
+    const startTime = performance.now();
+
+    function tick(now) {
+        if (!state.route.animating) return;
+
+        const elapsed = now - startTime;
+        let t = Math.min(elapsed / duration, 1);
+
+        // Ease-in-out for a more natural feel
+        t = t < 0.5
+            ? 2 * t * t
+            : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+        const dist = t * total;
+        const pos  = pointAtDistance(coordinates, cumDist, dist);
+        marker.setLngLat(pos);
+
+        if (elapsed < duration) {
+            state.route.animFrame = requestAnimationFrame(tick);
+        } else {
+            // Stay at the end for a moment, then loop
+            state.route.animFrame = requestAnimationFrame(() => {
+                setTimeout(() => {
+                    if (state.route.animating && state.route.drawn[0]) {
+                        startRouteAnimation(
+                            state.route.drawn[0].coordinates,
+                            state.route.profile
+                        );
+                    }
+                }, 1200);
+            });
+        }
+    }
+
+    state.route.animFrame = requestAnimationFrame(tick);
 }
 
 

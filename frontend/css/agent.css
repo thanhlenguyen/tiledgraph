@@ -1,0 +1,183 @@
+/* ============================================================
+   GeoRouting Lab — agent.css
+   Chat panel for the map assistant. Uses the same tokens as
+   styles.css (--surface, --border, --accent …) so it matches.
+   ============================================================ */
+
+/* Launcher button: top-right, left of the MapLibre zoom control */
+#agent-launcher {
+  position: fixed;
+  top: 10px;
+  right: 56px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 9999px;
+  font: 600 0.78rem var(--font-ui);
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+}
+#agent-launcher span { color: #a855f7; font-size: 0.95rem; }
+#agent-launcher:hover { background: var(--surface2); }
+#agent-launcher[aria-expanded="true"] { border-color: #a855f7; }
+
+/* Panel */
+#agent-panel {
+  position: fixed;
+  top: 54px;
+  right: 56px;
+  z-index: 40;
+  width: 370px;
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+#agent-panel.hidden { display: none; }
+
+.agent-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.agent-title { font-weight: 600; font-size: 0.88rem; }
+.agent-sub   { font-size: 0.68rem; color: var(--text-dim); margin-top: 2px; }
+
+.agent-icon-btn {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 0.9rem; cursor: pointer; padding: 4px 6px; border-radius: 4px;
+}
+.agent-icon-btn:hover { color: var(--text); background: var(--surface2); }
+
+/* Message log */
+.agent-log {
+  flex: 1;
+  min-height: 160px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-log::-webkit-scrollbar { width: 4px; }
+.agent-log::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.agent-empty p { font-size: 0.75rem; color: var(--text-dim); line-height: 1.5; margin-bottom: 10px; }
+.agent-chips { display: flex; flex-direction: column; gap: 6px; }
+.agent-chip {
+  text-align: start;
+  padding: 8px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 0.74rem var(--font-ui);
+  cursor: pointer;
+}
+.agent-chip:hover { border-color: #a855f7; }
+
+.agent-msg {
+  max-width: 88%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  word-break: break-word;
+}
+.agent-user      { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+.agent-assistant { align-self: flex-start; background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+.agent-thinking  { align-self: flex-start; color: var(--text-dim); font-style: italic; animation: agent-blink 1.4s ease-in-out infinite; }
+.agent-error     { align-self: stretch; background: #1f0808; color: #fca5a5; border: 1px solid #4a1515; max-width: 100%; }
+
+@keyframes agent-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+.agent-meta {
+  display: flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border);
+}
+.agent-tools  { flex: 1; font-size: 0.64rem; color: var(--text-dim); }
+.agent-thanks { font-size: 0.64rem; color: var(--green); }
+.agent-rate {
+  background: none; border: none; cursor: pointer; font-size: 0.8rem;
+  opacity: 0.55; padding: 2px 4px; border-radius: 4px;
+}
+.agent-rate:hover { opacity: 1; background: var(--surface); }
+
+/* Point picker row */
+.agent-point-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+}
+.agent-pick {
+  padding: 6px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  font: 600 0.72rem var(--font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.agent-pick.picking { border-color: var(--green); color: var(--green); animation: agent-blink 1.4s infinite; }
+.agent-point-label { flex: 1; color: var(--text-dim); font-family: var(--font-mono); font-size: 0.64rem; }
+.agent-link {
+  background: none; border: none; color: var(--text-dim);
+  font: 0.7rem var(--font-ui); cursor: pointer; text-decoration: underline;
+}
+.agent-link:hover { color: var(--text); }
+
+/* Input */
+.agent-form {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+}
+#agent-input {
+  flex: 1;
+  resize: none;
+  max-height: 120px;
+  padding: 9px 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  font: 0.8rem/1.4 var(--font-ui);
+}
+#agent-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.agent-send {
+  width: 36px; height: 36px; flex-shrink: 0;
+  background: var(--accent); color: #fff;
+  border: none; border-radius: 8px; cursor: pointer; font-size: 0.9rem;
+}
+.agent-send:disabled { opacity: 0.4; cursor: wait; }
+
+#agent-panel button:focus-visible,
+#agent-launcher:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Mobile: full-width sheet at the bottom */
+@media (max-width: 768px) {
+  #agent-launcher { top: auto; bottom: 16px; right: 16px; }
+  #agent-panel {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: auto; max-height: 70vh;
+    border-radius: 14px 14px 0 0;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thinking, .agent-pick.picking { animation: none; }
+}

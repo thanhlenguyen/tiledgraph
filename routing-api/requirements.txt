@@ -3,4 +3,5 @@ fastapi
 uvicorn[standard]
 httpx
 psycopg2-binary
-# pydantic
+pydantic>=2
+anthropic          # NEW: Claude SDK for the agentic layer

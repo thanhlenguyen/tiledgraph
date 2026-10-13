@@ -67,6 +67,16 @@ VALHALLA_TIMEOUT_S = 25.0
 # prevents SQL / query injection via the `type` URL parameter.
 _ALLOWED_FACILITY_TYPES = frozenset({"hospital", "fire station", "police", "clinic"})
 
+# Typesense configuration
+TS_URL = os.getenv(
+    "TS_URL",
+    f"{os.getenv('TYPESENSE_PROTOCOL', 'http')}://"
+    f"{os.getenv('TYPESENSE_HOST', 'typesense')}:"
+    f"{os.getenv('TYPESENSE_PORT', '8108')}",
+)
+
+TS_API_KEY = os.getenv("TYPESENSE_API_KEY", "xyz")
+TS_FACILITY_COLLECTION = os.getenv("TS_FACILITY_COLLECTION", "pois")
 
 # =============================================================================
 # POSTGRESQL CONNECTION POOL
@@ -904,6 +914,172 @@ async def nearest_facility_es(
         "count":            len(ranked),
         "facilities":       ranked,
     }
+
+# =============================================================================
+# NEAREST FACILITY — Typesense  →  GET /nearest_facility_ts
+#
+# DATA SOURCE: Typesense "pois" collection
+#
+# Required collection schema:
+#   {
+#     "name": "pois",
+#     "fields": [
+#       {"name": "name",     "type": "string"},
+#       {"name": "address",  "type": "string",   "optional": true},
+#       {"name": "type",     "type": "string",   "facet": true},
+#       {"name": "class",    "type": "string",   "facet": true, "optional": true},
+#       {"name": "location", "type": "geopoint"}          ← [lat, lon]
+#     ]
+#   }
+#
+# NOTE: Typesense geopoints are [lat, lon] (lat first), unlike GeoJSON.
+# =============================================================================
+
+@app.get("/nearest_facility_ts", tags=["Facility"])
+async def nearest_facility_ts(
+    lon:             Annotated[float, Query(ge=-180, le=180)],
+    lat:             Annotated[float, Query(ge=-90,  le=90)],
+    type:            str   = "hospital",
+    limit:           Annotated[int,   Query(ge=1, le=10)]   = 5,
+    max_distance_km: Annotated[float, Query(ge=1, le=20)]   = 5.0,
+    routes:          bool  = True,
+):
+    """
+    Find the nearest facilities using Typesense, then route to each one.
+
+    ALGORITHM (3 steps — identical contract to /nearest_facility_pg and _es)
+    ─────────────────────────────────────────────────────────────────────────
+    1. Typesense geo filter: find candidates within max_distance_km,
+       sorted by crow-fly distance.
+    2. Valhalla matrix: one HTTP call ranks all candidates by actual drive time.
+    3. Valhalla /route (concurrent): fetch turn-by-turn geometry in parallel.
+    """
+    facility_type = type.lower().strip()
+    if facility_type not in _ALLOWED_FACILITY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"type must be one of: {', '.join(sorted(_ALLOWED_FACILITY_TYPES))}.",
+        )
+
+    def _empty(message: str) -> dict:
+        return {"incident": {"lon": lon, "lat": lat}, "type": facility_type,
+                "search_radius_km": max_distance_km, "count": 0,
+                "facilities": [], "message": message}
+
+    # ── Step 1: Typesense geo search ─────────────────────────────────────────
+    #
+    # filter_by:
+    #   location:(lat, lon, R km)  — radius filter on the geopoint field
+    #   type:=`hospital`           — exact match; backticks escape special chars
+    # sort_by:
+    #   location(lat, lon):asc     — nearest first; distance comes back in
+    #                                hit["geo_distance_meters"]["location"]
+    ts_params = {
+        "q":         "*",
+        "query_by":  "name",
+        "filter_by": (
+            f"location:({lat}, {lon}, {max_distance_km} km) "
+            f"&& type:=`{facility_type}`"
+        ),
+        "sort_by":   f"location({lat}, {lon}):asc",
+        "per_page":  limit * CANDIDATE_MULTIPLIER,   # Typesense max is 250
+        "include_fields": "id,name,type,address,location",
+    }
+
+    try:
+        ts_resp = await client.get(
+            f"{TS_URL}/collections/{TS_FACILITY_COLLECTION}/documents/search",
+            params=ts_params,
+            headers={"X-TYPESENSE-API-KEY": TS_API_KEY},
+            timeout=15.0,
+        )
+    except httpx.RequestError as exc:
+        logger.error("Typesense unreachable: %s", exc)
+        raise HTTPException(status_code=503, detail="Search service unavailable.")
+
+    if ts_resp.status_code != 200:
+        logger.error("Typesense error %d: %s", ts_resp.status_code, ts_resp.text[:400])
+        raise HTTPException(status_code=502, detail="Search service returned an error.")
+
+    hits = ts_resp.json().get("hits", [])
+    if not hits:
+        return _empty(f"No {facility_type} found within {max_distance_km} km.")
+
+    # ── Parse Typesense hits into flat candidate dicts ───────────────────────
+    #
+    # Each hit looks like:
+    #   { "document": {"id": "…", "name": "…", "location": [lat, lon], …},
+    #     "geo_distance_meters": {"location": 1234} }
+    candidates = []
+    for hit in hits:
+        doc = hit.get("document", {})
+        loc = doc.get("location")
+        if not loc or len(loc) != 2:
+            continue
+
+        f_lat, f_lon = float(loc[0]), float(loc[1])   # [lat, lon]
+
+        dist_m = hit.get("geo_distance_meters", {}).get("location")
+        crow_dist_km = (
+            round(dist_m / 1000.0, 2)
+            if dist_m is not None
+            else round(_haversine_km(lat, lon, f_lat, f_lon), 2)
+        )
+
+        candidates.append({
+            "id":               doc.get("id", ""),
+            "name":             doc.get("name") or "Unknown",
+            "type":             doc.get("type", facility_type),
+            "address":          doc.get("address") or "",
+            "facility_lat":     f_lat,
+            "facility_lon":     f_lon,
+            "crow_distance_km": crow_dist_km,
+        })
+
+    logger.info("Typesense: %d candidate(s) for type=%s within %.1f km",
+                len(candidates), facility_type, max_distance_km)
+
+    if not candidates:
+        return _empty(f"No {facility_type} found within {max_distance_km} km.")
+
+    # ── Step 2: Rank by drive time ───────────────────────────────────────────
+    ranked = await _rank_by_travel_time(lon, lat, candidates, limit)
+    if not ranked:
+        return _empty(f"No routable {facility_type} found within {max_distance_km} km.")
+
+    # ── Step 3: Fetch route geometry (all facilities in parallel) ────────────
+    if routes:
+        route_results = await asyncio.gather(
+            *[_fetch_facility_route(lon, lat, f, i + 1) for i, f in enumerate(ranked)]
+        )
+        for entry, route_fc in zip(ranked, route_results):
+            entry["route"] = route_fc
+    else:
+        for entry in ranked:
+            entry["route"] = None
+
+    return {
+        "incident":         {"lon": lon, "lat": lat},
+        "type":             facility_type,
+        "search_radius_km": max_distance_km,
+        "count":            len(ranked),
+        "facilities":       ranked,
+    }
+# =============================================================================
+# AGENTIC LAYER  →  POST /agent/chat   (browser calls /api/agent/chat)
+#
+# agent.py reuses the helpers above (client, _forward, nearest_facility_pg …)
+# as tools for the AI model. The `if` guard avoids a double import when the
+# file is started with `python app.py` (uvicorn then re-imports it as "app").
+# =============================================================================
+
+import sys as _sys
+if __name__ != "__main__" and "agent" not in _sys.modules:
+    # Normal start: uvicorn imports app first, then we load the agent.
+    # If something imports agent FIRST (a test, `python -c "import agent"`),
+    # agent is still loading, so we skip here instead of crashing.
+    from agent import router as agent_router
+    app.include_router(agent_router)
 
 
 # =============================================================================
