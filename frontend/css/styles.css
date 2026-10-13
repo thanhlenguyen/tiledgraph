@@ -674,6 +674,20 @@ input[type="range"] {
 }
 .stop-marker:hover { transform: scale(1.25); }
 
+<<<<<<< HEAD
+=======
+/* Moving transport icon that follows the primary route */
+.route-anim-icon {
+  font-size: 28px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.55));
+  pointer-events: none;
+  user-select: none;
+  will-change: transform;
+  z-index: 10;
+}
+
+>>>>>>> agentic
 /* Facility result markers */
 .fac-marker {
   width: 32px;

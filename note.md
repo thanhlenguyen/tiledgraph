@@ -33,6 +33,7 @@ exec sudo su -l $USER
 ```yaml
 # version: '3.9'
 
+<<<<<<< HEAD
 services:
   postgis:
     image: postgis/postgis:16-3.5
@@ -40,6 +41,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+=======
+# version: '3.9'
+
+services:
+  postgis:
+    image: pgrouting/pgrouting:18-3.6-4.0
+    container_name: postgis_db
+    restart: unless-stopped
+    env_file:
+      - .env      
+>>>>>>> agentic
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -47,8 +59,13 @@ services:
     ports:
       - "5432:5432"
     volumes:
+<<<<<<< HEAD
       - vsol:/var/lib/postgresql/data
       - ./data:/data
+=======
+      - vsol:/var/lib/postgresql
+      - ${DATA_DIR}:/data
+>>>>>>> agentic
     shm_size: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -56,8 +73,82 @@ services:
       timeout: 5s
       retries: 10
 
+<<<<<<< HEAD
   martin:
     image: ghcr.io/maplibre/martin:1.5.0
+=======
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.3
+    container_name: elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node                  # Required for single node
+      - xpack.security.enabled=false                # Disable security for dev (no username/password)
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g                  # Adjust heap size (1GB each — change based on your RAM)
+      - "logger.org.elasticsearch: WARN"            # Reduce log noise
+      - http.cors.enabled=true
+      - http.cors.allow-origin="*"
+      - http.cors.allow-methods=OPTIONS,HEAD,GET,POST,PUT,DELETE
+      - http.cors.allow-headers=X-Requested-With,Content-Type,Content-Length,Authorization
+      - http.cors.allow-credentials=true   # optional but useful sometimes
+    ports:
+      - "9200:9200"                                 # HTTP API
+      # - "9300:9300"                                 # Transport (optional, can remove if not needed)
+    volumes:
+      - esdata:/usr/share/elasticsearch/data        # Persist ES data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:9200/_cat/health?h=status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    ulimits:
+      memlock: -1
+      nofile: 65536
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.5.3
+    container_name: kibana
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_PUBLICBASEURL=http://localhost:5601  # optional, helps with some proxy issues
+    volumes:
+      - kibana-data:/usr/share/kibana/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -f http://localhost:5601/api/status | grep -q 'green' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5    
+
+  typesense:
+    image: typesense/typesense:30.2
+    container_name: typesense
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8108:8108"
+    volumes:
+      - typesense-data:/data
+    command: >
+      --data-dir /data
+      --api-key=${TYPESENSE_API_KEY:-xyz}
+      --enable-cors
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8108/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  martin:
+    image: ghcr.io/maplibre/martin:1.16.0
+>>>>>>> agentic
     container_name: martin_server
     restart: unless-stopped
     env_file:
@@ -66,8 +157,15 @@ services:
       - "3000:3000"
     volumes:
       - ./config/martin-config.yml:/config.yml:ro
+<<<<<<< HEAD
       - ./data/mbtiles:/mbtiles:ro
       - ./data/pmtiles:/pmtiles:ro
+=======
+      - ${DATA_DIR}/mbtiles:/mbtiles:ro
+      - ${DATA_DIR}/pmtiles:/pmtiles:ro
+      - ${DATA_DIR}/fonts:/fonts:ro           # RAW .ttf / .otf folders
+      - ${DATA_DIR}/sprites:/sprites:ro       # RAW .svg icon folders
+>>>>>>> agentic
       - ./styles:/styles:ro
     command: --config /config.yml
     depends_on:
@@ -82,21 +180,35 @@ services:
       - "8002:8002"          # internal; we will proxy via Nginx later
     environment:
       - tile_urls=    # change if you want a smaller extract
+<<<<<<< HEAD
       - use_tiles_ignore_pbf=False      # Once built, don't rebuild from PBF on restart
       - force_rebuild=False          # set True only when you want to force a full rebuild
       - server_threads=4     # adjust to your CPU cores (4–8 is good for HCMC/Vietnam)
+=======
+      - use_tiles_ignore_pbf=True      # Once built, don't rebuild from PBF on restart
+      - force_rebuild=False          # set True only when you want to force a full rebuild
+      - server_threads=4     # adjust to your CPU cores 
+>>>>>>> agentic
       - build_elevation=False        # set True only if you need elevation data
       - build_admins=False
       - build_time_zones=False
       - build_tar=True               # creates fast .tar index
     volumes:
+<<<<<<< HEAD
       - ./data/pbf:/custom_files
+=======
+      - ${DATA_DIR}/pbf:/custom_files
+>>>>>>> agentic
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/status"]
       interval: 30s
       timeout: 10s
       retries: 10
+<<<<<<< HEAD
       start_period: 300s   # first build can take a while for Vietnam
+=======
+      start_period: 500s   # first build can take a while 
+>>>>>>> agentic
 
   vroom:
     image: ghcr.io/vroom-project/vroom-docker:latest
@@ -118,6 +230,7 @@ services:
       retries: 5
 
   routing-api:
+<<<<<<< HEAD
     build:
       context: ./routing-api
       dockerfile: Dockerfile
@@ -125,6 +238,20 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+=======
+    image: python:3.12-slim
+    container_name: routing-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"  # Expose if direct access; else proxy via Nginx
+    volumes:
+      - ./routing-api:/app  # Create this folder
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt && python app.py"
+>>>>>>> agentic
     depends_on:
       postgis:
         condition: service_healthy
@@ -139,7 +266,11 @@ services:
       retries: 5
 
   pgadmin:
+<<<<<<< HEAD
     image: dpage/pgadmin4:9.14.0
+=======
+    image: dpage/pgadmin4:9.18
+>>>>>>> agentic
     container_name: pgadmin4
     restart: always
     env_file: 
@@ -152,6 +283,18 @@ services:
     depends_on:
       - postgis
 
+<<<<<<< HEAD
+=======
+  typesense-dashboard:
+    image: bfritscher/typesense-dashboard:latest
+    container_name: typesense_dashboard
+    restart: unless-stopped
+    ports:
+      - "8109:80"   #http://localhost:8109/#/collection  to check data
+    depends_on:
+      - typesense
+      
+>>>>>>> agentic
   nginx:
     image: nginx:alpine
     container_name: nginx
@@ -160,11 +303,15 @@ services:
       - "3001:80"
     volumes:
       - ./frontend:/usr/share/nginx/html
+<<<<<<< HEAD
       - ./data/pmtiles:/usr/share/nginx/html/pmtiles:ro
       - ./data/sprites:/usr/share/nginx/html/sprites:ro
       - ./data/fonts:/usr/share/nginx/html/fonts:ro
       - ./styles:/usr/share/nginx/html/styles:ro
       - ./config/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+=======
+      - ./config/nginx.conf:/etc/nginx/conf.d/default.conf
+>>>>>>> agentic
     depends_on:
       - martin
       - routing-api
@@ -173,6 +320,13 @@ services:
 
 volumes:
   vsol:
+<<<<<<< HEAD
+=======
+  esdata:        
+  kibana-data: 
+  typesense-data:
+ 
+>>>>>>> agentic
  
 ```
 - Create vroom-config.yml file
@@ -687,6 +841,12 @@ cd ~/valhalla-data
 # Prepare osm.pbf file as previous phase
 ```
 5. Create Configuration File (valhalla.json)
+<<<<<<< HEAD
+=======
+This command creates a configuration file named valhalla.json.
+
+Valhalla needs this file to know where to put the data and where to find supporting files when building tiles and when running the routing service.   
+>>>>>>> agentic
 ```Bash
 mkdir -p valhalla_tiles
 
@@ -696,18 +856,30 @@ valhalla_build_config \
   --mjolnir-timezone ${PWD}/valhalla_tiles/timezones.sqlite \
   --mjolnir-admin ${PWD}/valhalla_tiles/admins.sqlite > valhalla.json
 ```
+<<<<<<< HEAD
+=======
+![alt text](image.png)
+>>>>>>> agentic
 6. Build Supporting Files (Admins + Timezones) if needed
 ```Bash
 # Timezones
 valhalla_build_timezones > valhalla_tiles/timezones.sqlite
 
 # Admins (important for driving side, access, etc.)
+<<<<<<< HEAD
 valhalla_build_admins -c valhalla.json switzerland-latest.osm.pbf
+=======
+valhalla_build_admins -c valhalla.json your-file.osm.pbf
+>>>>>>> agentic
 ```
 ### Step 2 Create *.tar file
 1. Build the Graph Tiles
 ```Bash
+<<<<<<< HEAD
 valhalla_build_tiles -c valhalla.json switzerland-latest.osm.pbf
+=======
+valhalla_build_tiles -c valhalla.json your-file.osm.pbf
+>>>>>>> agentic
 ```
 This step creates the hierarchy folders (0/, 1/, 2/) with .gph files inside valhalla_tiles/.
 2. Create tiles.tar:
@@ -719,13 +891,33 @@ valhalla_build_extract -c valhalla.json -v
 - Copy the built files to your mounted volume (usually ./custom_files or similar on the host) 
 - Update the hash file (the scripted image uses this to detect changes):
 ```Bash
+<<<<<<< HEAD
 cd /path/to/your/custom_files
 md5sum valhalla_tiles.tar > file_hashes.txt
+=======
+docker compose stop valhalla
+# Backup current working data (optional but safe)
+cp -r ~/data/pbf ~/data/pbf_backup_$(date +%Y%m%d)
+
+cd /path/to/your/valhalla-data
+
+cp valhalla_tiles.tar ~/data/pbf/
+cp valhalla.json ~/data/pbf/
+cp -r valhalla_tiles ~/data/pbf/
+cp valhalla_tiles/admins.sqlite ~/data/pbf/ 2>/dev/null || true
+cp valhalla_tiles/timezones.sqlite ~/data/pbf/ 2>/dev/null || true
+
+>>>>>>> agentic
 ```
 Restart the container with these environment variables:YAMLenvironment:
 ```bash
   - use_tiles_ignore_pbf=True
   - force_rebuild=False
   - build_tar=False
+<<<<<<< HEAD
+=======
+
+  docker compose start valhalla
+>>>>>>> agentic
 ```
 The container should load the pre-built valhalla_tiles.tar quickly without rebuilding.

@@ -1,0 +1,62 @@
+keep_alive: 75
+listen_addresses: '0.0.0.0:3000'
+base_path: /tiles
+worker_processes: 8
+cache_size_mb: 1024
+preferred_encoding: gzip
+web_ui: enable-for-all
+
+observability:
+  metrics:
+    add_labels: {}
+
+cors:
+  origin:
+    - "*"
+
+postgres:
+  connection_string: ${DATABASE_URL}
+  default_srid: 4326
+  auto_publish:
+    tables:
+      from_schemas:
+        - topology
+      source_id_format: '{schema}.{table}'
+      id_columns: id
+      clip_geom: true
+      buffer: 64
+      extent: 4096
+      bounds: [38, 20, 47, 27]
+
+pmtiles:
+  directory_cache_size_mb: 128
+  allow_http: true
+  paths:
+  - /mapservice/data/pmtiles
+
+mbtiles:
+  paths:
+  #  - /mapservice/data/mbtiles
+  sources:
+    satellite_9_6: /mapservice/data/mbtiles/598D39F2059E4607B22D4A0EE86E8BD5.mbtiles
+    satellite_9_7: /mapservice/data/mbtiles/2812072D27F7437EA9CEF8014947A278.mbtiles
+    satellite_10_6: /mapservice/data/mbtiles/9248D0C1038F40CEA524DEB60CC35C06.mbtiles
+    satellite_10_7: /mapservice/data/mbtiles/3ED20D606614402A9490917D67A395E7.mbtiles
+
+sprites:
+  cache_size_mb: 64
+  paths:
+  - /mapservice/data/sprites
+  sources:
+
+fonts:
+  cache_size_mb: 64
+  paths:
+  - /mapservice/data/fonts
+
+styles:
+  paths:
+  - /mapservice/tileserver/styles/mt-basic-style.json
+  - /mapservice/tileserver/styles/mt-sat-style.json
+  - /mapservice/tileserver/styles/mt-3d-style.json
+  - /mapservice/tileserver/styles/mt-bdf-style.json

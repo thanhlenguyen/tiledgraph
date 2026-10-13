@@ -1,3 +1,10 @@
+<<<<<<< HEAD
+=======
+# =============================================================================
+# This tool will read geodata table "building" and full join with table "floor" geodatabase
+# then export to geojson file (after that convert to pmtiles or mbtiles files)
+# =============================================================================
+>>>>>>> agentic
 import polars as pl
 from sqlalchemy import create_engine
 import urllib
@@ -23,6 +30,10 @@ table_schema = "sde"
 building = "dim_building"
 floor = "dim_floor"
 
+<<<<<<< HEAD
+=======
+print("reading data ......")
+>>>>>>> agentic
 df = pl.read_database(
     query = f"""
         SELECT		
@@ -51,6 +62,12 @@ df = pl.read_database(
             {table_schema}.{building} as b 
             Full Join {table_schema}.{floor} as f 
             ON b.fkShortAddress = f.fkShortAddress
+<<<<<<< HEAD
+=======
+
+        WHERE 
+            b.BuildingUseType <> 'Residential';
+>>>>>>> agentic
     """
     ,connection=engine, 
 )
@@ -77,7 +94,11 @@ convert_query = f"""
             Building_Type,
             CAST(
                 CASE 
+<<<<<<< HEAD
                     WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3.5 
+=======
+                    WHEN CAST(BuildingUseType AS INT) = 2000 THEN FloorsAboveGround * 3
+>>>>>>> agentic
                     ELSE FloorsAboveGround * 5
                 END 
                 AS FLOAT)
@@ -98,7 +119,12 @@ convert_query = f"""
         )
         TO 'buildingfloors.geojson'
     WITH (FORMAT GDAL, DRIVER 'GeoJSON', SRS 'EPSG:4326')"""
+<<<<<<< HEAD
 # print(convert_query)
+=======
+
+print("converting data...")
+>>>>>>> agentic
 con.execute(convert_query)
 con.close()
 
