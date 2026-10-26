@@ -23,17 +23,10 @@
 // "bearing" rotates the map (0 = north-up).
 // ---------------------------------------------------------------------------
 const STYLES = [
-<<<<<<< HEAD
-    { id: 'basic-style',name: 'Default',   url: '/styles/mt-basic-style.json', pitch: 0, zoom: 10, bearing: 0 },
-    { id: 'sat-style',  name: 'Satellite', url: '/styles/mt-sat-style.json', pitch: 0, zoom: 10, bearing: 0 },
-    { id: '3d-style',   name: '3D',        url: '/styles/mt-3d-style.json', pitch: 45, zoom: 13, bearing: 0 },
-    { id: 'bdf-style',  name: 'BDF',       url: '/styles/mt-bdf-style.json', pitch: 60, zoom: 17, bearing: -20 }
-=======
     { id: 'default',name: 'Default',   url: '/styles/mt-basic-style.json', pitch: 0, zoom: 10, bearing: 0 },
     { id: 'sat',  name: 'Satellite', url: '/styles/mt-sat-style.json', pitch: 0, zoom: 10, bearing: 0 },
     { id: '3d',   name: '3D',        url: '/styles/mt-3d-style.json', pitch: 45, zoom: 13, bearing: 0 },
     { id: 'bdf',  name: 'BDF',       url: '/styles/mt-bdf-style.json', pitch: 60, zoom: 17, bearing: -20 }
->>>>>>> agentic
 ];
 
 // ---------------------------------------------------------------------------
@@ -45,11 +38,7 @@ const API = {
     route:              `${BACKEND_URL}/route_val`,               // Valhalla turn-by-turn routing
     optimize:           `${BACKEND_URL}/optimize_route`,      // VROOM vehicle-route optimisation
     isochrone:          `${BACKEND_URL}/isochrone`,           // Valhalla reachability polygons
-<<<<<<< HEAD
-    nearestFacility:    `${BACKEND_URL}/nearest_facility_val`,    // Elastic Search + Valhalla
-=======
     nearestFacility:    `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
->>>>>>> agentic
     nearestFacilityPg:  `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
 };
 
@@ -1522,11 +1511,7 @@ window.searchUnits = async function() {
     // openSearchPanel();
     searchClearHighlight(); // clear any previous state before a new search
 
-<<<<<<< HEAD
-    const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_unit';
-=======
     const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_units';
->>>>>>> agentic
     const fields = currentDataset === 'va_building'
         ? ['properties.VerticalAddress^3', 'properties.ShortAddress^1.8']
         : ['properties.UnitAddres^3', 'properties.LabelNames^1.5', 'properties.NAME', ];
@@ -1638,27 +1623,17 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
         // "already exists" errors on rapid same-result clicks.
         if (state.map.getLayer(id))  state.map.removeLayer(id);
         if (state.map.getSource(id)) state.map.removeSource(id);
-<<<<<<< HEAD
-        state.map.addSource(id, {
-            type: 'geojson',
-            data: { type: 'Feature', geometry: feature.geometry, properties: props },
-=======
 
         const bufferedGeometry = _bufferPolygon(feature.geometry, 0.2); // 0.5 m buffer
         state.map.addSource(id, {
             type: 'geojson',
             data: { type: 'Feature', geometry: bufferedGeometry, properties: props },
->>>>>>> agentic
         });
 
         let extrusionBase, extrusionHeight;
         if (currentDataset === 'va_building') {
             const floorH    = (props.BuildingHeight || 0) / (props.FloorsAboveGround || 1);
-<<<<<<< HEAD
-            extrusionBase   = floorH * (props.FloorID || 0);
-=======
             extrusionBase   = floorH * (props.FloorNumber || 0);
->>>>>>> agentic
             extrusionHeight = extrusionBase + floorH;
         } else {
             extrusionBase   = props.Base || 0;
@@ -1682,8 +1657,6 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             firstSymbolId // insert below symbol layers so labels stay on top
         );
 
-<<<<<<< HEAD
-=======
         // ── Compute floor mid-elevation ──────────────────────────────────────
         // We want the camera to visually center on the floor midpoint in 3D,
         // not on the ground footprint. To do this we shift the map center
@@ -1705,20 +1678,10 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
         const targetPitch   = 58;
         const targetBearing = -18;
 
->>>>>>> agentic
         const sidebarW = parseInt(
             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w') || '340'
         ) + 20;
 
-<<<<<<< HEAD
-        state.map.fitBounds(bounds, {
-            padding: { top: 100, bottom: 100, left: sidebarW, right: 100 },
-            maxZoom: 19.5,
-            pitch:   58,
-            bearing: -18,
-            duration: 1600,
-            essential: true,
-=======
         // Screen height available (subtract sidebar padding)
         const screenH  = window.innerHeight - 160;
 
@@ -1758,19 +1721,14 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
                 padding:  { top: 80, bottom: 80, left: sidebarW, right: 80 },
                 essential: true,
             });
->>>>>>> agentic
         });
 
         setTimeout(() => {
             if (!state.map.getSource(id)) return; // highlight was superseded
             const popupHTML = buildPopupHTML(props, isUnit);
-<<<<<<< HEAD
-            const popupPos  = getPopupAnchorPosition(bounds);
-=======
             // const popupPos  = getPopupAnchorPosition(bounds); -- for old code without display popup with appropreate height
             // Get anchor position AND the vertical pixel offset for this floor
             const { lngLat: popupPos, offsetPx } = getPopupAnchorInfo(bounds, props, isUnit);
->>>>>>> agentic
 
             // Destroy any popup that slipped through (e.g. from a prior rapid click).
             if (state.searchPopup) {
@@ -1778,24 +1736,16 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
                 state.searchPopup = null;
             }
             state.searchPopup = new maplibregl.Popup({
-<<<<<<< HEAD
-                offset: 15, closeButton: true, maxWidth: '300px', className: 'unit-popup',
-=======
                 offset:  [0, -offsetPx],   // negative Y = upward in MapLibre 
                 closeButton: true, 
                 maxWidth: '300px', 
                 className: 'unit-popup',
->>>>>>> agentic
             })
                 .setLngLat(popupPos)
                 .setHTML(popupHTML)
                 .addTo(state.map);
             state.searchPopup.on('close', () => { state.searchPopup = null; });
-<<<<<<< HEAD
-        }, 900);
-=======
         }, 1800);
->>>>>>> agentic
     };
 
     // Always switch to BDF style before highlighting indoor data.
@@ -1810,11 +1760,7 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             b.classList.toggle('active', b.textContent === 'BDF'));
         state.map.once('idle', () => {
             restoreActiveLayers();
-<<<<<<< HEAD
-            doHighlight();      // ← single idle, not chained once('idle')
-=======
             requestAnimationFrame(() =>doHighlight());      // ← single idle, not chained once('idle') add rAF
->>>>>>> agentic
         });
     } else {
         doHighlight();          // already on BDF — highlight immediately
@@ -1868,8 +1814,6 @@ function getPopupAnchorPosition(bounds) {
     ];
 }
 
-<<<<<<< HEAD
-=======
 /**
  * Return { lngLat, offsetPx } for the popup anchor.
  * lngLat  — slightly outside the feature's footprint bounding box.
@@ -1909,7 +1853,6 @@ function getPopupAnchorInfo(bounds, props, isUnit) {
     return { lngLat, offsetPx };
 }
 
->>>>>>> agentic
 /** Remove all search-highlight layers/sources and close any open popup. */
 function searchClearHighlight() {
     if (state.searchPopup) { state.searchPopup.remove(); state.searchPopup = null; }
@@ -1920,8 +1863,6 @@ function searchClearHighlight() {
     state.searchHighlights = [];
     document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
 }
-<<<<<<< HEAD
-=======
 /**
  * Estimate how many CSS pixels correspond to `metres` of elevation at the
  * current map zoom and pitch.
@@ -2120,7 +2061,6 @@ function _bufferPolygon(geometry, metres) {
 
     return geometry; // Point, LineString etc — return unchanged
 }
->>>>>>> agentic
 
 
 // =============================================================================
@@ -2599,10 +2539,6 @@ class LayerSwitcherControl {
     }
 }
 
-<<<<<<< HEAD
-
-=======
->>>>>>> agentic
 // =============================================================================
 // SECTION 15: BOOT
 // Start the application once the browser has fully loaded the page.

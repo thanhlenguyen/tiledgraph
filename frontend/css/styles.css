@@ -40,7 +40,7 @@
   --s8:  #86efac;
   --s9:  #fde68a;
 
-  --sidebar-w: 280px;
+  --sidebar-w: 340px;
   --radius:    6px;
   --font-ui:   'DM Sans', system-ui, sans-serif;
   --font-mono: 'Space Mono', monospace;
@@ -674,8 +674,6 @@ input[type="range"] {
 }
 .stop-marker:hover { transform: scale(1.25); }
 
-<<<<<<< HEAD
-=======
 /* Moving transport icon that follows the primary route */
 .route-anim-icon {
   font-size: 28px;
@@ -687,7 +685,6 @@ input[type="range"] {
   z-index: 10;
 }
 
->>>>>>> agentic
 /* Facility result markers */
 .fac-marker {
   width: 32px;

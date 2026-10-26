@@ -6,16 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<<<<<<< HEAD
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
-  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-  <link rel="stylesheet" href="css/styles.css">
-=======
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
   <link rel="stylesheet" href="css/styles.css">
   <link rel="stylesheet" href="css/agent.css">   <!-- NEW: map assistant panel -->
->>>>>>> agentic
+  <link rel="stylesheet" href="css/analytics.css"> <!-- NEW: Analytics tab -->
 </head>
 <body>
 
@@ -70,6 +65,7 @@
       <button class="tab"        data-tab="vrp"       onclick="switchTab('vrp')">VRP / TSP</button>
       <button class="tab"        data-tab="isochrone" onclick="switchTab('isochrone')">Isochrone</button>
       <button class="tab"        data-tab="facility"  onclick="switchTab('facility')">Facility</button>
+      <button class="tab"        data-tab="analytics" onclick="switchTab('analytics')">Analytics</button>
     </div>
 
     <!-- ══════════════════════════════════════════════════════
@@ -231,6 +227,123 @@
 
     </div>
 
+    <!-- ══════════════════════════════════════════════════════
+         TAB 5 — ANALYTICS (Phase 3 + 5)
+         Every analysis runs on the area currently visible on the map.
+    ══════════════════════════════════════════════════════ -->
+    <div id="tab-analytics" class="tab-panel">
+
+      <p class="instruction">Runs on the area you see on the map. Zoom to a district or city first (up to 3,000 km²).</p>
+
+      <div class="field-row">
+        <label for="ana-type">Analysis</label>
+        <select id="ana-type" class="ana-select" onchange="analyticsShowFields()">
+          <option value="demand">Demand heatmap</option>
+          <option value="failrate">Delivery failure rate</option>
+          <option value="coverage">Facility coverage</option>
+          <option value="hotspots">Failure hot spots</option>
+          <option value="sites">Suggest new sites</option>
+          <option value="pins">Delivery-point corrections</option>
+        </select>
+        <p id="ana-help" class="ana-help"></p>
+      </div>
+
+      <div class="field-row" data-for="coverage sites">
+        <label for="ana-ftype" id="ana-ftype-label">Facility type</label>
+        <select id="ana-ftype" class="ana-select">
+          <option value="">None (start from zero)</option>
+          <option value="hospital" selected>🏥 Hospital</option>
+          <option value="clinic">🩺 Clinic</option>
+          <option value="police">👮 Police</option>
+          <option value="fire station">🚒 Fire station</option>
+        </select>
+      </div>
+
+      <div class="field-row" data-for="coverage sites">
+        <label>Time limit <span class="mono-val" id="ana-minutes-val">15 min</span></label>
+        <input type="range" id="ana-minutes" min="5" max="60" step="5" value="15"
+               oninput="document.getElementById('ana-minutes-val').textContent=this.value+' min'">
+      </div>
+
+      <div class="field-row" data-for="sites">
+        <label>New sites <span class="mono-val" id="ana-nsites-val">5</span></label>
+        <input type="range" id="ana-nsites" min="1" max="20" value="5"
+               oninput="document.getElementById('ana-nsites-val').textContent=this.value">
+      </div>
+
+      <div class="field-row" data-for="coverage sites">
+        <label>Transport</label>
+        <div class="seg-group" id="ana-profile">
+          <button class="seg active" data-v="auto"       onclick="segActivate('#ana-profile', this)">🚗 Car</button>
+          <button class="seg"        data-v="bicycle"    onclick="segActivate('#ana-profile', this)">🚲 Bike</button>
+          <button class="seg"        data-v="pedestrian" onclick="segActivate('#ana-profile', this)">🚶 Walk</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="coverage sites">
+        <label>Who travels</label>
+        <div class="seg-group" id="ana-direction">
+          <button class="seg active" data-v="to_facility"   onclick="segActivate('#ana-direction', this)">People go there</button>
+          <button class="seg"        data-v="from_facility" onclick="segActivate('#ana-direction', this)">Service goes out</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="hotspots">
+        <label>Method</label>
+        <div class="seg-group" id="ana-method">
+          <button class="seg active" data-v="gi_star" onclick="segActivate('#ana-method', this)">Hexagon stats</button>
+          <button class="seg"        data-v="dbscan"  onclick="segActivate('#ana-method', this)">Point clusters</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="failrate hotspots">
+        <label>Period</label>
+        <div class="seg-group" id="ana-days">
+          <button class="seg"        data-v="7"  onclick="segActivate('#ana-days', this)">7 days</button>
+          <button class="seg active" data-v="30" onclick="segActivate('#ana-days', this)">30 days</button>
+          <button class="seg"        data-v="90" onclick="segActivate('#ana-days', this)">90 days</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="demand failrate coverage hotspots sites">
+        <label>Hexagon size</label>
+        <div class="seg-group" id="ana-res">
+          <button class="seg"        data-v="9" onclick="segActivate('#ana-res', this)">Small</button>
+          <button class="seg active" data-v="8" onclick="segActivate('#ana-res', this)">Medium</button>
+          <button class="seg"        data-v="7" onclick="segActivate('#ana-res', this)">Large</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="sites">
+        <label>Solver</label>
+        <div class="seg-group" id="ana-solver">
+          <button class="seg active" data-v="greedy" onclick="segActivate('#ana-solver', this)">Fast</button>
+          <button class="seg"        data-v="exact"  onclick="segActivate('#ana-solver', this)">Best (slower)</button>
+        </div>
+      </div>
+
+      <div class="field-row" data-for="pins">
+        <label>Show offsets over <span class="mono-val" id="ana-minoff-val">30 m</span></label>
+        <input type="range" id="ana-minoff" min="10" max="200" step="10" value="30"
+               oninput="document.getElementById('ana-minoff-val').textContent=this.value+' m'">
+      </div>
+
+      <div class="btn-row">
+        <button class="btn-action" id="ana-run" onclick="analyticsRun()">Analyze this view</button>
+        <button class="btn-ghost" onclick="analyticsClear()">✕ Clear</button>
+      </div>
+
+      <div id="ana-status" class="mono-stat"></div>
+      <div id="ana-stats" class="ana-stats hidden"></div>
+      <div id="ana-legend" class="legend hidden"></div>
+
+      <div class="ana-admin" data-for="pins">
+        <button class="btn-ghost ana-learn" onclick="analyticsLearn()">Re-learn delivery points from GPS</button>
+        <p class="ana-help">Recomputes every address from delivery GPS. Usually run nightly.</p>
+      </div>
+
+    </div>
+
     <!-- ── Status bar (shared) ────────────────────────────── -->
     <div id="status-bar"></div>
 
@@ -244,9 +357,7 @@
   <!-- Layer switcher lives on the map (bottom-right via MapLibre control) -->
 
   <script src="js/scripts.js"></script>
-<<<<<<< HEAD
-=======
   <script src="js/agent.js"></script>            <!-- NEW: map assistant (load after scripts.js) -->
->>>>>>> agentic
+  <script src="js/analytics.js"></script>        <!-- NEW: Analytics tab (load after scripts.js) -->
 </body>
 </html>

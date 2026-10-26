@@ -23,17 +23,10 @@
 // "bearing" rotates the map (0 = north-up).
 // ---------------------------------------------------------------------------
 const STYLES = [
-<<<<<<< HEAD
-    { id: 'default', name: 'Default',   url: '/styles/style.json',     pitch: 0,  zoom: 13, bearing: 0   },
-    { id: 'sat',     name: 'Satellite', url: '/styles/style_sat.json', pitch: 0,  zoom: 13, bearing: 0   },
-    { id: '3d',      name: '3D',        url: '/styles/style_3d.json',  pitch: 45, zoom: 14, bearing: 0   },
-    { id: 'bdf',     name: 'BDF',       url: '/styles/style_bdf.json', pitch: 60, zoom: 17, bearing: -20 },
-=======
     { id: 'default', name: 'Default',   url: '/tiles/style/style',     pitch: 0,  zoom: 13, bearing: 0   },
     { id: 'sat',     name: 'Satellite', url: '/tiles/style/style_sat', pitch: 0,  zoom: 13, bearing: 0   },
     { id: '3d',      name: '3D',        url: '/tiles/style/style_3d',  pitch: 45, zoom: 14, bearing: 0   },
     { id: 'bdf',     name: 'BDF',       url: '/tiles/style/style_bdf', pitch: 60, zoom: 17, bearing: -20 },
->>>>>>> agentic
 ];
 
 // ---------------------------------------------------------------------------
@@ -45,14 +38,9 @@ const API = {
     route:              `${BACKEND_URL}/route_val`,               // Valhalla turn-by-turn routing
     optimize:           `${BACKEND_URL}/optimize_route`,      // VROOM vehicle-route optimisation
     isochrone:          `${BACKEND_URL}/isochrone`,           // Valhalla reachability polygons
-<<<<<<< HEAD
-    nearestFacility:    `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
-    nearestFacilityPg:  `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
-=======
     nearestFacility:    `${BACKEND_URL}/nearest_facility_pg`, // PostGIS spatial query + Valhalla
     nearestFacilityES:  `${BACKEND_URL}/nearest_facility_es`,    // Elastic Search + Valhalla
     nearestFacilityTS:  `${BACKEND_URL}/nearest_facility_ts`,    // Typesense + Valhalla
->>>>>>> agentic
 };
 
 // How long (in milliseconds) to wait for an API response before giving up.
@@ -123,12 +111,9 @@ const state = {
         points:  [],     // [[lng,lat], [lng,lat]] — start and end
         markers: [],     // maplibregl.Marker[] — the S and E pins
         drawn:   [],     // [{ coordinates, color, dash }] — decoded route lines
-<<<<<<< HEAD
-=======
         animMarker: null,   // moving transport icon marker
         animFrame:  null,   // requestAnimationFrame id
         animating:  false,
->>>>>>> agentic
     },
 
     // --- VRP / TSP ---
@@ -296,13 +281,10 @@ function restoreActiveLayers() {
     state.route.drawn.forEach((d, i) => {
         addRouteLayer(i, d.coordinates, d.color, d.dash);
     });
-<<<<<<< HEAD
-=======
     // Restart transport icon animation on the primary route after a style switch
     if (state.route.drawn[0]?.coordinates?.length >= 2) {
         startRouteAnimation(state.route.drawn[0].coordinates, state.route.profile);
     }
->>>>>>> agentic
 
     // VRP per-segment coloured lines
     state.vrp.drawnSegments.forEach(seg => {
@@ -323,12 +305,12 @@ function restoreActiveLayers() {
     if (state.infoPointerActive) {
         setupInfoPointerLayers();
     }
-<<<<<<< HEAD
-=======
 
     // Map assistant (agent.js) route & isochrone layers
     window.agentRestoreLayers?.();
->>>>>>> agentic
+
+    // Analytics tab (analytics.js) hexagons and lines
+    window.analyticsRestoreLayers?.();
 }
 
 
@@ -350,6 +332,7 @@ window.switchTab = (name) => {
     if (name !== 'vrp')       vrpFullClear();
     if (name !== 'isochrone') isoFullClear();
     if (name !== 'facility')  facilityFullClear();
+    if (name !== 'analytics') window.analyticsClear?.();
 };
 
 
@@ -533,10 +516,7 @@ window.routeClear = () => {
 /** Called only from switchTab — removes everything without touching mode state. */
 function routeFullClear() {
     exitMode();
-<<<<<<< HEAD
-=======
     stopRouteAnimation();
->>>>>>> agentic
     routeRemoveLayers();
     state.route.drawn   = [];
     state.route.points  = [];
@@ -548,10 +528,7 @@ function routeFullClear() {
 
 /** Reset picks, clear map lines and markers, hide the legend. */
 function routeResetPicks() {
-<<<<<<< HEAD
-=======
     stopRouteAnimation();
->>>>>>> agentic
     routeRemoveLayers();
     state.route.drawn   = [];
     state.route.points  = [];
@@ -690,14 +667,11 @@ async function runRouteComparison() {
     if (drawn > 0) {
         legendEl.classList.remove('hidden');
         setStatus(`✅ ${drawn} routes drawn. Legend shows distance and time.`, 'success');
-<<<<<<< HEAD
-=======
         // Animate transport icon along the primary (fastest) route
         const primary = state.route.drawn[0];
         if (primary?.coordinates?.length >= 2) {
             startRouteAnimation(primary.coordinates, state.route.profile);
         }
->>>>>>> agentic
     } else {
         setStatus('No routes returned — are the points within the routable area?', 'error');
     }
@@ -705,10 +679,7 @@ async function runRouteComparison() {
 
 /** Remove all three route sources and layers from the map. */
 function routeRemoveLayers() {
-<<<<<<< HEAD
-=======
     stopRouteAnimation();
->>>>>>> agentic
     [0, 1, 2].forEach(i => {
         if (state.map.getLayer(ROUTE_LYR(i)))  state.map.removeLayer(ROUTE_LYR(i));
         if (state.map.getSource(ROUTE_SRC(i))) state.map.removeSource(ROUTE_SRC(i));
@@ -746,8 +717,6 @@ function addRouteLayer(i, coordinates, color, dash) {
 }
 
 
-<<<<<<< HEAD
-=======
 // ---------------------------------------------------------------------------
 // Route animation — transport icon follows the primary route from A → B
 // ---------------------------------------------------------------------------
@@ -910,7 +879,6 @@ function startRouteAnimation(coordinates, profile) {
 }
 
 
->>>>>>> agentic
 // =============================================================================
 // SECTION 8: VRP / TSP (VROOM + Valhalla)
 // VRP (Vehicle Routing Problem) finds the optimal visit order for a set of
@@ -1728,11 +1696,7 @@ window.searchUnits = async function() {
     // openSearchPanel();
     searchClearHighlight(); // clear any previous state before a new search
 
-<<<<<<< HEAD
-    const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_unit';
-=======
     const index  = currentDataset === 'va_building' ? 'building_floors' : 'building_units';
->>>>>>> agentic
     const fields = currentDataset === 'va_building'
         ? ['properties.VerticalAddress^3', 'properties.ShortAddress^1.8']
         : ['properties.UnitAddres^3', 'properties.LabelNames^1.5', 'properties.NAME', ];
@@ -1844,27 +1808,17 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
         // "already exists" errors on rapid same-result clicks.
         if (state.map.getLayer(id))  state.map.removeLayer(id);
         if (state.map.getSource(id)) state.map.removeSource(id);
-<<<<<<< HEAD
-        state.map.addSource(id, {
-            type: 'geojson',
-            data: { type: 'Feature', geometry: feature.geometry, properties: props },
-=======
 
         const bufferedGeometry = _bufferPolygon(feature.geometry, 0.2); // 0.5 m buffer
         state.map.addSource(id, {
             type: 'geojson',
             data: { type: 'Feature', geometry: bufferedGeometry, properties: props },
->>>>>>> agentic
         });
 
         let extrusionBase, extrusionHeight;
         if (currentDataset === 'va_building') {
             const floorH    = (props.BuildingHeight || 0) / (props.FloorsAboveGround || 1);
-<<<<<<< HEAD
-            extrusionBase   = floorH * (props.FloorID || 0);
-=======
             extrusionBase   = floorH * (props.FloorNumber || 0);
->>>>>>> agentic
             extrusionHeight = extrusionBase + floorH;
         } else {
             extrusionBase   = props.Base || 0;
@@ -1888,8 +1842,6 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             firstSymbolId // insert below symbol layers so labels stay on top
         );
 
-<<<<<<< HEAD
-=======
         // ── Compute floor mid-elevation ──────────────────────────────────────
         // We want the camera to visually center on the floor midpoint in 3D,
         // not on the ground footprint. To do this we shift the map center
@@ -1911,20 +1863,10 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
         const targetPitch   = 58;
         const targetBearing = -18;
 
->>>>>>> agentic
         const sidebarW = parseInt(
             getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w') || '340'
         ) + 20;
 
-<<<<<<< HEAD
-        state.map.fitBounds(bounds, {
-            padding: { top: 100, bottom: 100, left: sidebarW, right: 100 },
-            maxZoom: 19.5,
-            pitch:   58,
-            bearing: -18,
-            duration: 1600,
-            essential: true,
-=======
         // Screen height available (subtract sidebar padding)
         const screenH  = window.innerHeight - 160;
 
@@ -1964,19 +1906,14 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
                 padding:  { top: 80, bottom: 80, left: sidebarW, right: 80 },
                 essential: true,
             });
->>>>>>> agentic
         });
 
         setTimeout(() => {
             if (!state.map.getSource(id)) return; // highlight was superseded
             const popupHTML = buildPopupHTML(props, isUnit);
-<<<<<<< HEAD
-            const popupPos  = getPopupAnchorPosition(bounds);
-=======
             // const popupPos  = getPopupAnchorPosition(bounds); -- for old code without display popup with appropreate height
             // Get anchor position AND the vertical pixel offset for this floor
             const { lngLat: popupPos, offsetPx } = getPopupAnchorInfo(bounds, props, isUnit);
->>>>>>> agentic
 
             // Destroy any popup that slipped through (e.g. from a prior rapid click).
             if (state.searchPopup) {
@@ -1984,24 +1921,16 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
                 state.searchPopup = null;
             }
             state.searchPopup = new maplibregl.Popup({
-<<<<<<< HEAD
-                offset: 15, closeButton: true, maxWidth: '300px', className: 'unit-popup',
-=======
                 offset:  [0, -offsetPx],   // negative Y = upward in MapLibre 
                 closeButton: true, 
                 maxWidth: '300px', 
                 className: 'unit-popup',
->>>>>>> agentic
             })
                 .setLngLat(popupPos)
                 .setHTML(popupHTML)
                 .addTo(state.map);
             state.searchPopup.on('close', () => { state.searchPopup = null; });
-<<<<<<< HEAD
-        }, 900);
-=======
         }, 1800);
->>>>>>> agentic
     };
 
     // Always switch to BDF style before highlighting indoor data.
@@ -2016,11 +1945,7 @@ async function zoomToFeature(feature, clickedElement, isUnit = true) {
             b.classList.toggle('active', b.textContent === 'BDF'));
         state.map.once('idle', () => {
             restoreActiveLayers();
-<<<<<<< HEAD
-            doHighlight();      // ← single idle, not chained once('idle')
-=======
             requestAnimationFrame(() =>doHighlight());      // ← single idle, not chained once('idle') add rAF
->>>>>>> agentic
         });
     } else {
         doHighlight();          // already on BDF — highlight immediately
@@ -2074,8 +1999,6 @@ function getPopupAnchorPosition(bounds) {
     ];
 }
 
-<<<<<<< HEAD
-=======
 /**
  * Return { lngLat, offsetPx } for the popup anchor.
  * lngLat  — slightly outside the feature's footprint bounding box.
@@ -2115,7 +2038,6 @@ function getPopupAnchorInfo(bounds, props, isUnit) {
     return { lngLat, offsetPx };
 }
 
->>>>>>> agentic
 /** Remove all search-highlight layers/sources and close any open popup. */
 function searchClearHighlight() {
     if (state.searchPopup) { state.searchPopup.remove(); state.searchPopup = null; }
@@ -2126,8 +2048,6 @@ function searchClearHighlight() {
     state.searchHighlights = [];
     document.querySelectorAll('.result-item').forEach(el => el.classList.remove('active'));
 }
-<<<<<<< HEAD
-=======
 /**
  * Estimate how many CSS pixels correspond to `metres` of elevation at the
  * current map zoom and pitch.
@@ -2326,7 +2246,6 @@ function _bufferPolygon(geometry, metres) {
 
     return geometry; // Point, LineString etc — return unchanged
 }
->>>>>>> agentic
 
 
 // =============================================================================
