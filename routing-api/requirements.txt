@@ -5,3 +5,7 @@ httpx
 psycopg2-binary
 pydantic>=2
 anthropic          # NEW: Claude SDK for the agentic layer
+h3>=4              # NEW: H3 hexagon indexing (analytics)
+shapely>=2         # NEW: point-in-polygon for travel-time areas (pulls in numpy)
+numpy
+ortools            # NEW, optional: exact site selection (method "exact"); greedy works without it

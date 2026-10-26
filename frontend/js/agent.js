@@ -294,7 +294,7 @@ function agentDrawLayers(layers) {
     layers.filter(l => l.kind === 'points').forEach(l => {
         (l.geojson.features || []).forEach(f => {
             const p  = f.properties || {};
-            const el = makeStopEl(p.label || '•', l.color || '#3b9eff');
+            const el = makeStopEl(p.label || '•', p.color || l.color || '#3b9eff');   // per-feature colour wins
             const popup = new maplibregl.Popup({ offset: 14, closeButton: false })
                 .setText(p.title || l.label);
             agent.markers.push(

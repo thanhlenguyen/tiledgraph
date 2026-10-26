@@ -1074,6 +1074,12 @@ async def nearest_facility_ts(
 # =============================================================================
 
 import sys as _sys
+if __name__ != "__main__" and "analytics" not in _sys.modules:
+    # Phase 3 + 5 spatial analytics (heatmaps, coverage, hotspots, site selection,
+    # delivery-point learning). Same guard idea as the agent below.
+    from analytics import router as analytics_router
+    app.include_router(analytics_router)
+
 if __name__ != "__main__" and "agent" not in _sys.modules:
     # Normal start: uvicorn imports app first, then we load the agent.
     # If something imports agent FIRST (a test, `python -c "import agent"`),

@@ -1,0 +1,79 @@
+/* ============================================================
+   GeoRouting Lab — analytics.css
+   Analytics tab. Uses the tokens from styles.css.
+   ============================================================ */
+
+.ana-select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  font: 0.76rem var(--font-ui);
+  cursor: pointer;
+}
+.ana-select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+.ana-help {
+  margin-top: 6px;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+#ana-run:disabled { opacity: 0.6; cursor: wait; }
+
+/* Results: label left, number right, numbers in the mono face like other stats */
+.ana-stats {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.ana-stats.hidden { display: none; }
+.ana-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+}
+.ana-stat:last-child { border-bottom: none; }
+.ana-stat-label { color: var(--text-dim); }
+.ana-stat-value { font-family: var(--font-mono); color: var(--text); text-align: right; }
+/* First row is the headline result (coverage %, hot spots …) */
+.ana-stat:first-child .ana-stat-value { color: var(--green); font-weight: 700; font-size: 0.82rem; }
+
+.ana-swatch {
+  flex-shrink: 0;
+  width: 14px; height: 14px;
+  border-radius: 3px;
+  opacity: 0.85;
+}
+
+.ana-admin {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border2);
+}
+.ana-learn { width: 100%; }
+.ana-learn:hover { border-color: var(--amber); color: var(--amber); }
+
+/* Hexagon click popup */
+.ana-popup .maplibregl-popup-content {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: 0.72rem var(--font-ui);
+}
+.ana-popup .maplibregl-popup-tip { border-top-color: var(--surface); border-bottom-color: var(--surface); }
+.ana-popup .maplibregl-popup-close-button { color: var(--text-dim); }
+.ana-popup td { padding: 2px 8px 2px 0; }
+.ana-popup td:first-child { color: var(--text-dim); }
+.ana-popup td:last-child { font-family: var(--font-mono); text-align: right; }

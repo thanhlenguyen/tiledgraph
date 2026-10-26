@@ -48,6 +48,7 @@ import anthropic
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
+import analytics     # Phase new tools: coverage, hotspots, site selection, …
 import app as core   # your existing app.py — we reuse its client, helpers and endpoints
 
 logger = logging.getLogger("georouting.agent")
@@ -127,6 +128,14 @@ Tools and limits
 - Isochrone: up to 4 time bands, each 1-60 minutes.
 - optimize_stops: the FIRST stop is the start/depot. It returns a draft plan only; nothing is dispatched.
 - If a request is outside these tools, say what you can do instead.
+
+Area analytics (area_heatmap, coverage_analysis, find_hotspots, suggest_sites, delivery_point_corrections)
+- These need an "area". If the user names none, use the current map view: {{"bbox": <Map bbox from context>}}.
+  For "around my point" use {{"center": <picked point>, "radius_km": 3-10}}.
+- If a tool says the area is too large, ask the user to zoom in.
+- suggest_sites ranks candidate locations by travel time only. Always say that land, zoning and cost
+  still need checking on site. Never present them as final decisions.
+- Mention the time window (days) behind hotspot or failure numbers.
 
 Answer style
 - Reply in the user's language (Arabic or English).
@@ -546,7 +555,7 @@ async def tool_optimize_stops(stops: list, mode: str = "vrp", profile: str = "au
                 for n, j in enumerate(order, start=1)]
         layers.append(_layer("points", f"Vehicle {r['vehicle']} stops", _fc(pins), color))
 
-    layers.append(_layer("points", "Depot", _fc([_point_feature(*pts[0], label="D", title=labels[0])]), "#ffffff"))
+    layers.append(_layer("points", "Depot", _fc([_point_feature(*pts[0], label="D", title=labels[0])]), "#0f172a"))
     unassigned = [labels[u["id"]] for u in data.get("unassigned", [])]
     return ({"mode": mode, "vehicles": plan, "unassigned": unassigned,
              "total_duration_min": round(data.get("summary", {}).get("duration", 0) / 60, 1),
@@ -562,6 +571,10 @@ TOOL_FUNCS = {
     "find_nearest_facility": tool_find_nearest_facility,
     "optimize_stops":        tool_optimize_stops,
 }
+
+# Phase 3 + 5 analytics tools live in analytics.py (read-only for the agent)
+TOOLS += analytics.AGENT_TOOLS
+TOOL_FUNCS.update(analytics.AGENT_FUNCS)
 
 
 async def run_tool(name: str, args: dict) -> tuple[dict, list]:
@@ -595,6 +608,7 @@ class ChatContext(BaseModel):
     picked_point: dict | None = None    # {"lon","lat"} the user clicked with "Pick point"
     map_center:   dict | None = None    # {"lon","lat"} current view center
     map_zoom:     float | None = None
+    map_bbox:     list[float] | None = None # [west, south, east, north] of the current view
     last_results: list | None = None    # compact tool results from the previous answer
 
 
@@ -745,11 +759,19 @@ MOCK_FACILITY_WORDS = {
     "police":       ["police", "شرطة"],
     "fire station": ["fire", "إطفاء", "دفاع مدني"],
 }
-MOCK_ISO_WORDS   = ["minute", " min", "isochrone", "reach", "drive area", "coverage", "دقيقة", "دقائق", "نطاق"]
+MOCK_ISO_WORDS   = ["minute", " min", "isochrone", "reach", "drive area", "دقيقة", "دقائق", "نطاق"]
 MOCK_ROUTE_WORDS = ["route", "directions", "go to", "طريق", "مسار"]
 MOCK_HELP = ("Test mode (no AI model connected). I understand: a short address like RRRD2929, "
              "'10 20 30 minute drive area', 'nearest hospital/clinic/police/fire station', "
-             "and 'route to the first one'. Pick a point first for the last three.")
+             "'route to the first one' (pick a point first for these), and for the current map view: "
+             "'hot spots', 'hospital coverage 15 min', 'suggest 5 sites', 'demand heatmap', 'wrong pins'.")
+MOCK_ANALYTICS = [   # (words, tool) — checked in order, against the current map view
+    (["hot spot", "hotspot", "بؤر", "fail"], "find_hotspots"),
+    (["coverage", "share", "percent", "%", "تغطية", "نسبة"], "coverage_analysis"),
+    (["site", "locker", "where should", "new branch", "موقع", "مواقع"], "suggest_sites"),
+    (["pin", "offset", "delivery point", "wrong location", "دبوس"], "delivery_point_corrections"),
+    (["heatmap", "heat map", "demand", "density", "كثافة", "طلب"], "area_heatmap"),
+]
 
 
 def _first_point(last_results: list | None):
@@ -769,6 +791,34 @@ async def _loop_mock(question: str, ctx, st: RunState) -> str:
     async def call(name, args):
         (_, result), = await _execute([("mock", name, args)], st)
         return result
+
+    # 0. Area analytics on the current map view
+    tool = next((t for words, t in MOCK_ANALYTICS if any(w in q for w in words)), None)
+    if tool:
+        if not ctx.map_bbox:
+            return "No map view received. Reload the page and try again."
+        args = {"area": {"bbox": ctx.map_bbox}}
+        ftype = next((t for t, words in MOCK_FACILITY_WORDS.items() if any(w in q for w in words)), "hospital")
+        nums = [int(n) for n in re.findall(r"\d+", q)]
+        if tool == "coverage_analysis":
+            args.update(facility_type=ftype, minutes=next((n for n in nums if 1 <= n <= 60), 15))
+        elif tool == "suggest_sites":
+            args.update(n_sites=next((n for n in nums if 1 <= n <= 20), 5))
+        r = await call(tool, args)
+        if "error" in r:
+            return r["error"]
+        if tool == "coverage_analysis":
+            return (f"**{r['coverage_pct']}%** of demand is within {r['minutes']} min of a {r['facility_type']} "
+                    f"({r['facilities_considered']} facilities considered).")
+        if tool == "find_hotspots":
+            reason = (r.get("failure_reasons_in_hotspots") or [{}])[0].get("reason", "unknown")
+            return f"**{r['hot_cells_95']}** hot-spot hexagons (95%+) in the last {r['days']} days. Top reason: {reason}."
+        if tool == "suggest_sites":
+            return (f"Coverage {r['coverage_before_pct']}% → **{r['coverage_after_pct']}%** with "
+                    f"{len(r['sites'])} new sites. Check land and zoning before deciding.")
+        if tool == "delivery_point_corrections":
+            return f"**{r['addresses']}** addresses where drivers deliver far from the pin (median {r['median_offset_m']} m)."
+        return f"Heatmap drawn: {r.get('cells', 0)} hexagons."
 
     # 1. Short address code, e.g. RRRD2929
     code = re.search(r"\b[a-z]{4}\d{4}\b", q)
@@ -824,7 +874,7 @@ async def agent_chat(req: ChatRequest, request: Request):
     history = [{"role": m.role, "content": m.content.strip()}
                for m in req.messages if m.role in ("user", "assistant") and m.content.strip()]
     history = history[-MAX_HISTORY:]
-    while history and history[0]["role"] != "user":       # API requires user first
+    while history and history[0]["role"] != "user":       # models require user first
         history.pop(0)
     if not history or history[-1]["role"] != "user":
         raise HTTPException(400, "The last message must be from the user.")
@@ -837,9 +887,11 @@ async def agent_chat(req: ChatRequest, request: Request):
     ctx_lines = [f"Picked point: {json.dumps(ctx.picked_point) if ctx.picked_point else 'none'}"]
     if ctx.map_center:
         ctx_lines.append(f"Map center: {json.dumps(ctx.map_center)} (zoom {ctx.map_zoom})")
+    if ctx.map_bbox:
+        ctx_lines.append(f"Map bbox: {json.dumps(ctx.map_bbox)}")
     if ctx.last_results:
         ctx_lines.append("Results from the previous answer (for 'the second one', 'that hospital'): "
-                         + json.dumps(ctx.last_results, ensure_ascii=False)[:4000])
+                         + _dumps(ctx.last_results)[:4000])
     history[-1] = {"role": "user", "content": f"{question}\n\n<map_context>\n" + "\n".join(ctx_lines) + "\n</map_context>"}
 
     # 3. Run the chosen brain

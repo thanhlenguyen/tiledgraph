@@ -308,6 +308,9 @@ function restoreActiveLayers() {
 
     // Map assistant (agent.js) route & isochrone layers
     window.agentRestoreLayers?.();
+
+    // Analytics tab (analytics.js) hexagons and lines
+    window.analyticsRestoreLayers?.();
 }
 
 
@@ -329,6 +332,7 @@ window.switchTab = (name) => {
     if (name !== 'vrp')       vrpFullClear();
     if (name !== 'isochrone') isoFullClear();
     if (name !== 'facility')  facilityFullClear();
+    if (name !== 'analytics') window.analyticsClear?.();
 };
 
 
