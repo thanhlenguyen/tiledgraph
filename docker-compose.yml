@@ -2,19 +2,11 @@
 
 services:
   postgis:
-<<<<<<< HEAD
-    image: postgis/postgis:16-3.5
-    container_name: postgis_db
-    restart: unless-stopped
-    env_file:
-      - .env
-=======
     image: pgrouting/pgrouting:18-3.6-4.0
     container_name: postgis_db
     restart: unless-stopped
     env_file:
-      - .env      
->>>>>>> agentic
+      - .env    
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -22,13 +14,8 @@ services:
     ports:
       - "5432:5432"
     volumes:
-<<<<<<< HEAD
-      - vsol:/var/lib/postgresql/data
-      - ./data:/data
-=======
       - vsol:/var/lib/postgresql
       - ${DATA_DIR}:/data
->>>>>>> agentic
     shm_size: 1g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -37,11 +24,7 @@ services:
       retries: 10
 
   elasticsearch:
-<<<<<<< HEAD
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.1
-=======
     image: docker.elastic.co/elasticsearch/elasticsearch:9.5.3
->>>>>>> agentic
     container_name: elasticsearch
     restart: unless-stopped
     environment:
@@ -69,11 +52,7 @@ services:
       nofile: 65536
 
   kibana:
-<<<<<<< HEAD
-    image: docker.elastic.co/kibana/kibana:9.4.1
-=======
     image: docker.elastic.co/kibana/kibana:9.5.3
->>>>>>> agentic
     container_name: kibana
     restart: unless-stopped
     ports:
@@ -92,10 +71,6 @@ services:
       timeout: 10s
       retries: 5    
 
-<<<<<<< HEAD
-  martin:
-    image: ghcr.io/maplibre/martin:1.10.0
-=======
   typesense:
     image: typesense/typesense:30.2
     container_name: typesense
@@ -119,7 +94,6 @@ services:
 
   martin:
     image: ghcr.io/maplibre/martin:1.16.0
->>>>>>> agentic
     container_name: martin_server
     restart: unless-stopped
     env_file:
@@ -128,15 +102,10 @@ services:
       - "3000:3000"
     volumes:
       - ./config/martin-config.yml:/config.yml:ro
-<<<<<<< HEAD
-      - ./data/mbtiles:/mbtiles:ro
-      - ./data/pmtiles:/pmtiles:ro
-=======
       - ${DATA_DIR}/mbtiles:/mbtiles:ro
       - ${DATA_DIR}/pmtiles:/pmtiles:ro
       - ${DATA_DIR}/fonts:/fonts:ro           # RAW .ttf / .otf folders
       - ${DATA_DIR}/sprites:/sprites:ro       # RAW .svg icon folders
->>>>>>> agentic
       - ./styles:/styles:ro
     command: --config /config.yml
     depends_on:
@@ -159,11 +128,7 @@ services:
       - build_time_zones=False
       - build_tar=True               # creates fast .tar index
     volumes:
-<<<<<<< HEAD
-      - ./data/pbf:/custom_files
-=======
       - ${DATA_DIR}/pbf:/custom_files
->>>>>>> agentic
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/status"]
       interval: 30s
@@ -189,11 +154,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
-<<<<<<< HEAD
-  routing-api:
-    image: python:3.12-slim
-=======
   ollama:
     image: ollama/ollama
     volumes:
@@ -205,8 +165,7 @@ services:
     #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
 
   routing-api:
-    build: ./routing-api              # uses routing-api/Dockerfile: installs packages once
->>>>>>> agentic
+    build: ./routing-api 
     container_name: routing-api
     restart: unless-stopped
     env_file:
