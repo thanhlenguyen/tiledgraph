@@ -4,12 +4,7 @@ env/
 checkcode
 building_floors.pmtiles
 buildingfloors.geojson
-<<<<<<< HEAD
-buildingfloors.geojson
-*.geojson
-=======
 *.geojson
 # Large GIS datasets
 buildingfloors.geojson
 data_preparation/buildingfloors.geojson
->>>>>>> agentic

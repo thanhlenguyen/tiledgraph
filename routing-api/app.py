@@ -67,8 +67,6 @@ VALHALLA_TIMEOUT_S = 25.0
 # prevents SQL / query injection via the `type` URL parameter.
 _ALLOWED_FACILITY_TYPES = frozenset({"hospital", "fire station", "police", "clinic"})
 
-<<<<<<< HEAD
-=======
 # Typesense configuration
 TS_URL = os.getenv(
     "TS_URL",
@@ -79,7 +77,6 @@ TS_URL = os.getenv(
 
 TS_API_KEY = os.getenv("TYPESENSE_API_KEY", "xyz")
 TS_FACILITY_COLLECTION = os.getenv("TS_FACILITY_COLLECTION", "pois")
->>>>>>> agentic
 
 # =============================================================================
 # POSTGRESQL CONNECTION POOL
@@ -918,8 +915,6 @@ async def nearest_facility_es(
         "facilities":       ranked,
     }
 
-<<<<<<< HEAD
-=======
 # =============================================================================
 # NEAREST FACILITY — Typesense  →  GET /nearest_facility_ts
 #
@@ -1092,7 +1087,6 @@ if __name__ != "__main__" and "agent" not in _sys.modules:
     from agent import router as agent_router
     app.include_router(agent_router)
 
->>>>>>> agentic
 
 # =============================================================================
 # ENTRY POINT

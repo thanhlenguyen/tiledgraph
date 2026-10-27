@@ -5,13 +5,8 @@ from elasticsearch import Elasticsearch, helpers
 # Connect to ES 
 es = Elasticsearch(["http://localhost:9200/"])
 
-<<<<<<< HEAD
-geojson_file = "/mnt/d/Git/tiledgraph/buildingfloors.geojson"  # Path to your GeoJSON file
-index = "building_floors"  # Target ES index name
-=======
 geojson_file = "/mnt/d/Git/mapserver/data/pois.geojson"  # Path to your GeoJSON file
 index = "pois"  # Target ES index name
->>>>>>> agentic
 
 # Load GeoJSON
 with open(geojson_file, "r", encoding="utf-8") as f:  # Replace with your file path
