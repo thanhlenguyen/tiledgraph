@@ -20,7 +20,6 @@
         0, 1,
         10, 1,
         12, 0
-
     ]
   },
   "sources": {
@@ -428,7 +427,12 @@
           4,
           ["*", ["get", "NoOfFloor"], 3]
         ],
-        "fill-extrusion-color": "#f2ede3",
+        "fill-extrusion-color": [
+            "case",
+            ["==", ["get", "IsPersonalized"], true], 
+            "#e0e49b",
+            "#f2ede3"
+        ],
         "fill-extrusion-opacity": 0.85
       }
     },
@@ -733,7 +737,7 @@
       "id": "address-label",
       "type": "symbol",
       "source": "address_layer",
-      "source-layer": "Short_Address",
+      "source-layer": "Short_Address_Label",
       "minzoom": 16,
       "layout": {
         "text-field": ["get", "ShortAddress"],
@@ -752,54 +756,6 @@
       "paint": {
         "text-color": "#383839",
         "text-halo-color": "#ffffff",
-        "text-halo-width": 1
-      }
-    },
-
-    {
-      "id": "3D Personalize Address",
-      "type": "fill-extrusion",
-      "source": "personal_address",
-      "source-layer": "Personalize_Address",
-      "minzoom": 14,
-      "layout": {"visibility": "visible"},
-      "paint": {
-          "fill-extrusion-height": [
-              "case",
-              [
-                  "any",
-                  ["==", ["get", "LandTypeID"], 5001],
-                  ["==", ["get", "LandTypeID"], 7002],
-                  ["==", ["get", "LandTypeID"], 8001]
-              ],
-              0,
-              ["==", ["get", "NoOfFloor"], null],
-              4,
-              ["*", ["get", "NoOfFloor"], 3]
-          ],
-          "fill-extrusion-color": "#e0e49b"
-      }
-    },
-    {
-      "id": "3D Personalize Address Label",
-      "type": "symbol",
-      "source": "personal_address",
-      "source-layer": "Personalize_Address",
-      "minzoom": 14.5,
-      "layout": {"visibility": "visible",
-          "text-field": ["to-string", ["get", "ShortAddress"]],
-          "text-font": ["Roboto Bold"],
-          "text-size": [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              15, 6,
-              20, 11
-          ]
-      },
-      "paint": {
-        "text-color": "#383839",
-        "text-halo-color": "#f3f2f2",
         "text-halo-width": 1
       }
     },

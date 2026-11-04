@@ -77,3 +77,18 @@
 .ana-popup td { padding: 2px 8px 2px 0; }
 .ana-popup td:first-child { color: var(--text-dim); }
 .ana-popup td:last-child { font-family: var(--font-mono); text-align: right; }
+
+/* Explanation shown when an analysis finds nothing */
+.ana-hint {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: rgba(245, 166, 35, 0.08);
+  border: 1px solid rgba(245, 166, 35, 0.35);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+.ana-zoom { width: 100%; }
+.ana-zoom:hover { border-color: var(--accent); color: var(--accent); }

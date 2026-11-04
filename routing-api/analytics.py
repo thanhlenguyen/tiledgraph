@@ -39,6 +39,7 @@ import numpy as np
 import shapely
 from fastapi import APIRouter, Header, HTTPException, Request
 from shapely.geometry import shape
+import psycopg2
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, Field, model_validator
 
@@ -53,6 +54,12 @@ router = APIRouter(prefix="/analytics", tags=["Analytics"])
 # =============================================================================
 
 MAX_AREA_KM2         = float(os.getenv("ANALYTICS_MAX_AREA_KM2", "3000"))   # protects the server
+
+# --- Which Valhalla analytics uses ---
+# On Kubernetes, point this at the separate analytics deployment so heavy runs
+# never slow down the Route / Facility tabs:  http://valhalla-analytics:8002
+# Not set → same Valhalla as everything else (docker-compose setup keeps working).
+ANALYTICS_VALHALLA_URL = os.getenv("ANALYTICS_VALHALLA_URL", "").rstrip("/") or None
 
 # --- Protecting Valhalla (shared with the Route / Facility tabs and the agent) ---
 # Max isochrone requests in flight for ALL analytics requests together.
@@ -69,6 +76,11 @@ ISO_CACHE_TTL_S      = int(os.getenv("ANALYTICS_ISO_CACHE_TTL_S", "3600"))
 ISO_CACHE_MAX        = 3000
 ADMIN_TOKEN          = os.getenv("ANALYTICS_ADMIN_TOKEN")    # if set, required for /learn
 SQL_TIMEOUT          = "60s"
+# Delivery-point learning runs in batches of address ids. Each batch has its own
+# time limit, so national data (millions of addresses) never hits one giant query.
+LEARN_BATCH_SIZE     = int(os.getenv("LEARN_BATCH_SIZE", "50000"))
+LEARN_BATCH_TIMEOUT  = os.getenv("LEARN_BATCH_TIMEOUT", "300s")
+_LEARN_LOCK_KEY      = 72_317_001          # pg advisory lock: one learning run at a time
 
 # Fastest plausible speed per profile (km/h). Used ONLY to decide which
 # facilities just outside the map could still serve people inside it.
@@ -377,7 +389,7 @@ async def _isochrones(sites: list[tuple], minutes: list[int], profile: str,
                     "polygons": True, "denoise": 0.3, "generalize": 60,
                     "reverse": direction == "to_facility"}
             try:
-                resp = await core.client.post(f"{core.VALHALLA_URL}/isochrone",
+                resp = await core.client.post(f"{ANALYTICS_VALHALLA_URL or core.VALHALLA_URL}/isochrone",
                                               json=body, timeout=ISO_TIMEOUT_S)
                 resp.raise_for_status()
                 feats = resp.json().get("features", [])
@@ -890,6 +902,7 @@ WITH drops AS (
     FROM analytics.deliveries d
     JOIN analytics.demand_points a ON a.id = d.address_id
     WHERE d.status = 'delivered' AND d.drop_geom IS NOT NULL
+      AND d.address_id BETWEEN %(lo)s AND %(hi)s              -- one batch of addresses
       AND ST_DWithin(d.drop_geom::geography, a.geom::geography, %(max_offset)s)
 ),
 m1 AS (
@@ -936,22 +949,91 @@ upsert AS (
         -- a reviewed point goes back to 'pending' only if it moved more than 10 m
         review_status = CASE WHEN ST_Distance(l.learned_geom::geography, EXCLUDED.learned_geom::geography) > 10
                              THEN 'pending' ELSE l.review_status END
-    RETURNING offset_m, confidence
+    RETURNING 1
 )
+SELECT COUNT(*)::int AS addresses FROM upsert
+"""
+
+# Summary over everything learned in this run (updated_at is set by the upsert)
+LEARN_SUMMARY_SQL = """
 SELECT COUNT(*)::int AS addresses,
        COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY offset_m), 0)::float AS median_offset_m,
        COUNT(*) FILTER (WHERE offset_m > 30)::int  AS over_30m,
        COUNT(*) FILTER (WHERE offset_m > 100)::int AS over_100m,
        COUNT(*) FILTER (WHERE confidence >= 0.5)::int AS confident
-FROM upsert
+FROM analytics.learned_delivery_points
+WHERE updated_at >= %(since)s
 """
+
+
+def learn_sync(conn, params: dict, progress=None) -> dict:
+    """
+    Learn delivery points batch by batch on one psycopg2 connection.
+    Used by the API endpoint and by scripts/learn_delivery_points.py.
+
+    WHY "enable_nestloop = off": PostgreSQL guesses the per-address medians
+    return ~1 row (they return thousands), picks a nested-loop join and ends up
+    comparing every address with every delivery — 12x slower on 20k test
+    addresses, and hopeless on millions. Hash joins keep it linear.
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s) AS got", (_LEARN_LOCK_KEY,))
+        if not cur.fetchone()["got"]:
+            conn.rollback()
+            raise AnalyticsError("Delivery-point learning is already running. Wait for it to finish.")
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""SELECT now() AS started, MIN(address_id) AS lo, MAX(address_id) AS hi
+                           FROM analytics.deliveries
+                           WHERE status = 'delivered' AND drop_geom IS NOT NULL""")
+            r = cur.fetchone()
+        conn.commit()
+        if r["lo"] is None:
+            raise AnalyticsError("No successful deliveries with GPS found. Load delivery data first.")
+
+        step = max(1000, LEARN_BATCH_SIZE)
+        starts = range(r["lo"], r["hi"] + 1, step)
+        learned = 0
+        for i, lo in enumerate(starts, start=1):
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                try:
+                    cur.execute(f"SET LOCAL statement_timeout = '{LEARN_BATCH_TIMEOUT}'; "
+                                "SET LOCAL lock_timeout = '30s'; "
+                                "SET LOCAL enable_nestloop = off;")
+                    cur.execute(LEARN_SQL, {**params, "lo": lo, "hi": lo + step - 1})
+                    learned += cur.fetchone()["addresses"]
+                    conn.commit()                       # each batch is saved as it finishes
+                except Exception:
+                    conn.rollback()
+                    raise
+            if progress:
+                progress(i, len(starts), learned)
+
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(LEARN_SUMMARY_SQL, {"since": r["started"]})
+            summary = dict(cur.fetchone())
+        conn.commit()
+        summary["batches"] = len(starts)
+        return summary
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (_LEARN_LOCK_KEY,))
+        conn.commit()
+
+
+def _learn_with_pool(params: dict) -> dict:
+    with core.db_connection() as conn:
+        return learn_sync(conn, params)
 
 
 async def learn_delivery_points(req: LearnReq) -> dict:
     t0 = time.time()
-    rows = await _query(LEARN_SQL, {"max_offset": req.max_offset_m, "min_n": req.min_deliveries,
-                                    "inlier": req.inlier_radius_m})
-    r = rows[0] if rows else {}
+    try:
+        r = await asyncio.to_thread(_learn_with_pool, {"max_offset": req.max_offset_m,
+                                                       "min_n": req.min_deliveries,
+                                                       "inlier": req.inlier_radius_m})
+    except RuntimeError as exc:                       # pool unavailable
+        raise HTTPException(503, f"Database unavailable: {exc}")
     return {"summary": {**r, "seconds": round(time.time() - t0, 1)},
             "stats": [["Addresses learned", f"{r.get('addresses', 0):,}"],
                       ["Median offset", f"{r.get('median_offset_m', 0):.1f} m"],
@@ -959,6 +1041,52 @@ async def learn_delivery_points(req: LearnReq) -> dict:
                       ["Offset > 100 m", f"{r.get('over_100m', 0):,}"],
                       ["Confident (≥ 0.5)", f"{r.get('confident', 0):,}"]],
             "legend": [], "layers": []}
+
+
+async def _offsets_diagnosis(bbox, req: OffsetsReq) -> tuple[str, list | None, list]:
+    """When nothing is shown, find out WHY, step by step, and say what to do.
+    Returns (hint, bbox_of_learned_data_or_None, extra_stats)."""
+    d = (await _query(
+        """SELECT
+             (SELECT COUNT(*) FROM analytics.deliveries
+               WHERE status = 'delivered' AND drop_geom IS NOT NULL)::int           AS gps_deliveries,
+             (SELECT COUNT(*) FROM analytics.learned_delivery_points)::int          AS learned_total,
+             (SELECT MAX(updated_at) FROM analytics.learned_delivery_points)        AS last_learned,
+             (SELECT ST_Extent(official_geom) FROM analytics.learned_delivery_points)::text AS extent,
+             COUNT(*)::int                                                         AS in_view,
+             COUNT(*) FILTER (WHERE offset_m >= %(min_off)s)::int                  AS over_offset,
+             COALESCE(MAX(offset_m), 0)::float                                     AS max_offset,
+             COUNT(*) FILTER (WHERE offset_m >= %(min_off)s
+                                AND confidence < %(min_conf)s)::int                AS low_confidence
+           FROM analytics.learned_delivery_points
+           WHERE official_geom && ST_MakeEnvelope(%(w)s, %(s)s, %(e)s, %(n)s, 4326)""",
+        {**dict(zip("wsen", bbox)), "min_off": req.min_offset_m, "min_conf": req.min_confidence}))[0]
+
+    last = d["last_learned"].strftime("%Y-%m-%d %H:%M") if d["last_learned"] else "never"
+    extra = [["Learned addresses (all areas)", f"{d['learned_total']:,}"],
+             ["Learned in this view", f"{d['in_view']:,}"],
+             ["Last learning run", last]]
+
+    if d["gps_deliveries"] == 0:
+        return ("There is no delivery GPS in the database yet. Load test data "
+                "(generate_test_data.py or fake_gps.py), then press Re-learn."), None, extra
+    if d["learned_total"] == 0:
+        return (f"{d['gps_deliveries']:,} GPS deliveries exist but nothing has been learned yet. "
+                "Press \"Re-learn delivery points from GPS\" below, then analyse again."), None, extra
+    if d["in_view"] == 0:
+        data_bbox = None
+        if d["extent"]:                                    # 'BOX(w s,e n)'
+            nums = [float(x) for x in d["extent"].replace("BOX(", "").replace(")", "").replace(",", " ").split()]
+            data_bbox = nums
+        return ("No learned addresses in this map view. They are somewhere else on the map. "
+                "Use \"Zoom to learned data\". If you just added fake GPS, press Re-learn first."), data_bbox, extra
+    if d["over_offset"] == 0:
+        return (f"{d['in_view']:,} addresses here were learned, but none moved {req.min_offset_m:.0f} m or more "
+                f"(largest: {d['max_offset']:.0f} m). Lower the slider. If you just added fake GPS, press Re-learn."), None, extra
+    if d["low_confidence"]:
+        return (f"{d['low_confidence']:,} addresses moved {req.min_offset_m:.0f} m+ but their confidence is below "
+                f"{req.min_confidence}. Add more deliveries per address (5 or more) and re-learn."), None, extra
+    return "Nothing matches the filters in this view.", None, extra
 
 
 async def delivery_point_offsets(req: OffsetsReq) -> dict:
@@ -987,18 +1115,29 @@ async def delivery_point_offsets(req: OffsetsReq) -> dict:
                                  f"(confidence {r['confidence']:.2f}, {r['n_used']} drops)")
                     for r in rows[:200]]     # markers are heavier than lines; cap them
     offs = [r["offset_m"] for r in rows]
+
+    # Legend: only the bands at or above the slider value (fixes "100–50 m")
+    lo = req.min_offset_m
+    legend = [{"color": c, "label": (f"{max(a, lo):.0f}–{b} m" if b else f"> {max(a, lo):.0f} m")}
+              for a, b, c in ((0, 50, "#facc15"), (50, 100, "#f5a623"), (100, None, "#f43f5e"))
+              if b is None or b > lo]
+
+    hint, data_bbox, extra = (None, None, [])
+    if not rows:
+        hint, data_bbox, extra = await _offsets_diagnosis(bbox, req)
+
     return {
-        "summary": {"addresses": len(rows),
+        "hint": hint,
+        "data_bbox": data_bbox,
+        "summary": {"addresses": len(rows), **({"why_empty": hint} if hint else {}),
                     "median_offset_m": round(sorted(offs)[len(offs) // 2], 1) if offs else 0,
                     "largest": [{"address": r["short_address"] or r["address_id"], "offset_m": round(r["offset_m"]),
                                  "confidence": r["confidence"], "learned_lon": round(r["llon"], 6),
                                  "learned_lat": round(r["llat"], 6)} for r in rows[:5]]},
         "stats": [["Addresses to review", f"{len(rows):,}"],
                   ["Median offset", f"{sorted(offs)[len(offs) // 2]:.0f} m" if offs else "—"],
-                  ["Largest offset", f"{offs[0]:.0f} m" if offs else "—"]],
-        "legend": [{"color": "#facc15", "label": f"{req.min_offset_m:.0f}–50 m"},
-                   {"color": "#f5a623", "label": "50–100 m"},
-                   {"color": "#f43f5e", "label": "> 100 m"}],
+                  ["Largest offset", f"{offs[0]:.0f} m" if offs else "—"]] + extra,
+        "legend": legend if rows else [],
         "layers": [_layer("line", "Official → learned point", lines, color="#f5a623"),
                    _layer("points", "Learned delivery points", learned_pins, color="#22d98a")],
     }
@@ -1007,6 +1146,26 @@ async def delivery_point_offsets(req: OffsetsReq) -> dict:
 # =============================================================================
 # HTTP ENDPOINTS
 # =============================================================================
+
+def _db_error_tip(exc: Exception) -> str:
+    """A plain-language next step for the database errors people actually hit."""
+    code = getattr(exc, "pgcode", None) or ""
+    if code == "42501":   # insufficient_privilege
+        return (" — the API's database user cannot write to the analytics tables. "
+                "Grant it access: GRANT USAGE ON SCHEMA analytics TO <user>; "
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA analytics TO <user>;")
+    if code == "57014":   # query_canceled (statement_timeout)
+        return (f" — the query took too long (analyses: {SQL_TIMEOUT}, learning: {LEARN_BATCH_TIMEOUT} per batch). "
+                "For learning, lower LEARN_BATCH_SIZE or run: python scripts/learn_delivery_points.py")
+    if code == "55P03":   # lock_not_available (lock_timeout)
+        return (" — another session is holding a lock on the analytics tables (an import, or an "
+                "unfinished earlier run). Wait for it, or check pg_stat_activity.")
+    if code in ("42P01", "42703"):   # undefined table / column
+        return " — the analytics tables are missing or outdated. Re-run sql/001_analytics_schema.sql."
+    if code == "25006":   # read_only_sql_transaction
+        return " — the API is connected to a read-only database (replica?). Learning must run on the primary."
+    return ""
+
 
 async def _run(func, req, request: Request | None = None):
     """Run an analysis. If the browser disconnects (closed tab, pressed Clear,
@@ -1025,6 +1184,11 @@ async def _run(func, req, request: Request | None = None):
         raise HTTPException(429, str(exc))
     except AnalyticsError as exc:
         raise HTTPException(400, str(exc))
+    except psycopg2.Error as exc:
+        # Show the real database message instead of a bare "Internal Server Error"
+        msg = (exc.pgerror or str(exc)).strip().splitlines()[0] if (exc.pgerror or str(exc)) else type(exc).__name__
+        logger.exception("Database error in %s", func.__name__)
+        raise HTTPException(500, f"Database error ({type(exc).__name__}): {msg}{_db_error_tip(exc)}")
     out["seconds"] = round(time.time() - t0, 2)
     logger.info("%s finished in %.2fs", func.__name__, out["seconds"])
     return out
