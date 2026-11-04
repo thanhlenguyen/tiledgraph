@@ -118,7 +118,7 @@ window.analyticsRun = async function () {
             body: JSON.stringify(analyticsBody(type)),
             signal: ana.controller.signal,
         });
-        const data = await res.json().catch(() => ({}));
+        const data = await anaReadJson(res);
         if (res.status === 429) throw new Error('Busy: another coverage or site analysis is running. Try again in a moment.');
         if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `HTTP ${res.status}`);
 
@@ -126,6 +126,7 @@ window.analyticsRun = async function () {
         analyticsShowStats(data.stats || [], data.legend || []);
         statusEl.textContent = `Done in ${data.seconds ?? '?'} s. ` +
             (type === 'pins' ? 'Click a green dot for details.' : 'Click a hexagon for details.');
+        if (data.hint) analyticsShowHint(data.hint, data.data_bbox);   // explains an empty result
         setStatus('✅ Analysis complete', 'success');
 
     } catch (err) {
@@ -162,7 +163,7 @@ window.analyticsLearn = async function () {
             if (!token) { statusEl.textContent = 'Cancelled.'; return; }
             res = await send(token);
         }
-        const data = await res.json();
+        const data = await anaReadJson(res);
         if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
         analyticsShowStats(data.stats, []);
         statusEl.textContent = `Learned in ${data.seconds} s. Press "Analyze this view" to see corrections.`;
@@ -175,6 +176,35 @@ window.analyticsLearn = async function () {
 // -----------------------------------------------------------------------------
 // 3. SIDEBAR RESULTS
 // -----------------------------------------------------------------------------
+
+/** Explain an empty result in the sidebar, with an optional "Zoom to learned data" button. */
+/** Read a response as JSON even when the server sent plain text or HTML
+ *  (e.g. "Internal Server Error" from a crash or a proxy timeout page). */
+async function anaReadJson(res) {
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch { return { detail: `Server returned HTTP ${res.status}: ${text.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}` }; }
+}
+
+function analyticsShowHint(hint, dataBbox) {
+    const statusEl = document.getElementById('ana-status');
+    statusEl.innerHTML = '';
+    const p = document.createElement('div');
+    p.className = 'ana-hint';
+    p.textContent = hint;
+    statusEl.appendChild(p);
+    if (dataBbox) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn-ghost ana-zoom';
+        b.textContent = '🔍 Zoom to learned data';
+        b.onclick = () => {
+            state.map.fitBounds([[dataBbox[0], dataBbox[1]], [dataBbox[2], dataBbox[3]]], { padding: 60, maxZoom: 15 });
+            state.map.once('moveend', () => analyticsRun());
+        };
+        statusEl.appendChild(b);
+    }
+}
 
 function analyticsShowStats(stats, legend) {
     const statsEl = document.getElementById('ana-stats');

@@ -195,7 +195,7 @@ services:
       start_period: 30s
 
   pgadmin:
-    image: dpage/pgadmin4:9.18
+    image: dpage/pgadmin4:9.19
     container_name: pgadmin4
     restart: always
     env_file: 
