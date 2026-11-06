@@ -53,7 +53,7 @@ const ES_URL = '/es';
 // Map defaults
 // ---------------------------------------------------------------------------
 const DEFAULT_CENTER = [46.597, 24.876]; // Riyadh
-const DEFAULT_ZOOM   = 13;
+const DEFAULT_ZOOM   = 9;
 
 // ---------------------------------------------------------------------------
 // Colour palettes

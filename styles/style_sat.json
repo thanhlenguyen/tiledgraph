@@ -422,8 +422,19 @@
       "minzoom": 5,
       "maxzoom": 10,
       "layout": {
-        "text-field": ["get", "EnglishName"],
-        "text-font": ["Roboto Bold"],
+        "text-field": [
+            "format",
+            ["get", "EnglishName"],
+            { "font-scale": 1, "text-font": ["literal", ["Roboto Bold"]] },
+            "\n",
+            {},
+            ["get", "ArabicName"],
+            {
+              "font-scale": 0.85,
+              "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+            }
+          ],
+        "text-font": ["Roboto Bold", "Noto Sans Regular"],
         "text-size": [
           "interpolate", 
           ["linear"], 
@@ -449,8 +460,19 @@
       "minzoom": 6.5,
       "maxzoom": 12,
       "layout": {
-        "text-field": ["get", "EnglishName"],
-        "text-font": ["Roboto Bold"],
+        "text-field": [
+            "format",
+            ["get", "EnglishName"],
+            { "font-scale": 1, "text-font": ["literal", ["Roboto Bold"]] },
+            "\n",
+            {},
+            ["get", "ArabicName"],
+            {
+              "font-scale": 0.85,
+              "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+            }
+          ],
+        "text-font": ["Roboto Bold", "Noto Sans Regular"],
         "text-size": [
           "interpolate", 
           ["linear"], 
@@ -474,7 +496,19 @@
       "minzoom": 9.5,
       "maxzoom": 18,
       "layout": {
-        "text-field": ["get", "EnglishName"],
+        "text-field": [
+            "format",
+            ["get", "EnglishName"],
+            { "font-scale": 1, "text-font": ["literal", ["Roboto Bold"]] },
+            "\n",
+            {},
+            ["get", "ArabicName"],
+            {
+              "font-scale": 0.85,
+              "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+            }
+          ],
+        "text-font": ["Roboto Bold", "Noto Sans Regular"],
         "text-size": [
           "interpolate", 
           ["linear"], 
@@ -490,7 +524,6 @@
           8, 20, 
           13, 0
         ],
-        "text-font": ["Roboto Bold"],
         "visibility": "visible"
       },
       "paint": {
@@ -509,7 +542,19 @@
       "minzoom": 10,
       "maxzoom": 18,
       "layout": {
-        "text-field": ["get", "EnglishName"],
+        "text-field": [
+            "format",
+            ["get", "EnglishName"],
+            { "font-scale": 1, "text-font": ["literal", ["Roboto Bold"]] },
+            "\n",
+            {},
+            ["get", "ArabicName"],
+            {
+              "font-scale": 0.85,
+              "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+            }
+          ],
+        "text-font": ["Roboto Bold", "Noto Sans Regular"],
         "text-size": [
           "interpolate", 
           ["linear"], 
@@ -525,7 +570,6 @@
           11, 40, 
           16, 0
         ],
-        "text-font": ["Roboto Bold"],
         "visibility": "visible"
       },
       "paint": {
@@ -576,8 +620,28 @@
       "source-layer": "RegionStreet",
       "minzoom": 7,
       "layout": {
-        "text-field": ["get", "EnglishName"],
-        "text-font": ["Roboto Regular"],
+        "text-field": [
+            "step",
+            ["zoom"],
+            ["get", "EnglishName"], 
+            10,
+            [
+              "format",
+              ["get", "EnglishName"],
+              {
+                "font-scale": 1,
+                "text-font": ["literal", ["Roboto Regular"]]
+              },
+              "   ",
+              {},
+              ["get", "ArabicName"],
+              {
+                "font-scale": 0.85,
+                "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+              }
+            ]
+          ],
+        "text-font": ["Roboto Regular", "Noto Sans Regular"],
         "text-size": [
               "interpolate",
               ["linear"],
@@ -614,8 +678,28 @@
       "source-layer": "MainStreet",
       "minzoom": 10,
       "layout": {
-        "text-field": ["get", "EnglishName"],
-        "text-font": ["Noto Sans Regular"],
+        "text-field": [
+            "step",
+            ["zoom"],
+            ["get", "EnglishName"], 
+            13,
+            [
+              "format",
+              ["get", "EnglishName"],
+              {
+                "font-scale": 1,
+                "text-font": ["literal", ["Roboto Regular"]]
+              },
+              "   ",
+              {},
+              ["get", "ArabicName"],
+              {
+                "font-scale": 0.85,
+                "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+              }
+            ]
+          ],
+        "text-font": ["Roboto Regular", "Noto Sans Regular"],
         "text-size": [
               "interpolate",
               ["linear"],
@@ -653,8 +737,28 @@
       "source-layer": "OtherStreet",
       "minzoom": 12.5,
       "layout": {
-        "text-field": ["get", "EnglishName"],
-        "text-font": ["Noto Sans Regular"],
+        "text-field": [
+            "step",
+            ["zoom"],
+            ["get", "EnglishName"], 
+            16,
+            [
+              "format",
+              ["get", "EnglishName"],
+              {
+                "font-scale": 1,
+                "text-font": ["literal", ["Noto Sans Regular"]]
+              },
+              "   ",
+              {},
+              ["get", "ArabicName"],
+              {
+                "font-scale": 0.85,
+                "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+              }
+            ]
+          ],
+        "text-font": ["Roboto Regular", "Noto Sans Regular"],
         "text-size": [
               "interpolate",
               ["linear"],
@@ -723,8 +827,28 @@
         "icon-image": ["get", "maki"],
         "icon-size": 1,
         "icon-allow-overlap": true,
-        "text-field": ["get", "name"],
-        "text-font": ["Roboto Regular"],
+        "text-field": [
+            "step",
+            ["zoom"],
+            ["get", "name"], 
+            19,
+            [
+              "format",
+              ["get", "name"],
+              {
+                "font-scale": 1,
+                "text-font": ["literal", ["Roboto Regular"]]
+              },
+              "   ",
+              {},
+              ["get", "name_ar"],
+              {
+                "font-scale": 0.85,
+                "text-font": ["literal", ["Noto Naskh Arabic Regular"]]
+              }
+            ]
+          ],
+        "text-font": ["Roboto Regular", "Noto Sans Regular"],
         "text-anchor": "top",
         "text-offset": [0, 0.6],
         "visibility": "visible",
